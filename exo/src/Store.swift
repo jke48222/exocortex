@@ -20,13 +20,14 @@ enum SourceKind: String {
     case screenCoach = "screen_coach"
     case emailKnown = "email_known"
     case emailUnknown = "email_unknown", web, ocr, transcriptOther = "transcript_other"
+    case messageOther = "message_other"
     case modelOutput = "model_output"
 
     var trust: String {
         switch self {
         case .typed, .voiceSelf: return "self"
         case .ownNote, .ownCalendar, .ownFile, .screenCoach: return "verified"
-        case .emailKnown: return "third_party"
+        case .emailKnown, .messageOther: return "third_party"
         case .emailUnknown, .web, .ocr, .transcriptOther, .modelOutput: return "untrusted"
         }
     }
@@ -43,7 +44,8 @@ struct RetentionClass {
         .init(name: "text",        ttlDays: nil, note: "extracted text — kept forever; ~6 GB/decade, cheaper than the vectors it generates"),
         .init(name: "raw_frame",   ttlDays: 21,  note: "pixel frames — rolling cache, not an archive (228 GB budget)"),
         .init(name: "sensitive",   ttlDays: 30,  note: "T3: health, finance, legal — separate DEK in Phase 2"),
-        .init(name: "third_party", ttlDays: 14,  note: "identifiable third parties — shortest of all (Rynes C-212/13)"),
+        .init(name: "third_party", ttlDays: 14,  note: "incidentally-captured third parties — shortest of all (Rynes C-212/13)"),
+        .init(name: "correspondence", ttlDays: 1825, note: "messages other people sent me: their data, deliberately shorter than mine, but long enough to be useful (5y). Messages.app remains the system of record"),
     ]
 }
 
