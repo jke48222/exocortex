@@ -22,7 +22,6 @@ enum FileEvents {
                        "/.claude/", "/Application Support/"]
 
     static func watch(store: Store, seconds: Double) -> Int {
-        setvbuf(stdout, nil, _IOLBF, 0)   // line-buffer: piped output survives a crash
         let home = NSHomeDirectory()
         var count = 0
         let cursorKey = "fsevents"

@@ -3,6 +3,11 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 
+// Line-buffer stdout. When output is redirected it is block-buffered by default, so a
+// crash or a SIGTERM discards everything printed so far — which twice made a working
+// command look like it had silently done nothing.
+setvbuf(stdout, nil, _IOLBF, 0)
+
 let args = Array(CommandLine.arguments.dropFirst())
 func opt(_ n: String, _ d: String) -> String {
     if let i = args.firstIndex(of: n), i + 1 < args.count { return args[i + 1] }
@@ -13,8 +18,14 @@ func positional() -> [String] {
     var out: [String] = []; var i = 1
     while i < args.count {
         let a = args[i]
-        if ["--db", "--limit", "--interval", "--files", "--days", "--min-trust", "--reason"].contains(a) { i += 2; continue }
-        if a.hasPrefix("--") { i += 1; continue }
+        // Skip any --flag, and its value too when the next token is not itself a flag.
+        // A hardcoded flag list silently turned `--provider mlx` into the search term
+        // "mlx" for every flag added after it was written.
+        if a.hasPrefix("--") {
+            let hasValue = i + 1 < args.count && !args[i + 1].hasPrefix("--")
+            i += hasValue ? 2 : 1
+            continue
+        }
         out.append(a); i += 1
     }
     return out
@@ -53,6 +64,29 @@ case "ingest":
     let dt = Date().timeIntervalSince(t0)
     print("claudecode: +\(n) ingested, \(skip) skipped, \(red) secret-shaped lines redacted")
     print("  \(String(format: "%.1f", dt))s · total events now \(store.count())")
+
+case "gmail-auth":
+    let pos = positional()
+    guard pos.count >= 2 else {
+        print("""
+        usage: exo gmail-auth <CLIENT_ID> <CLIENT_SECRET>
+
+        Get these from Google Cloud Console (see SETUP-GMAIL.md). The critical step:
+        set the OAuth consent screen's publishing status to "In production" and do NOT
+        submit for verification — Testing status expires refresh tokens every 7 days.
+        """)
+        break
+    }
+    _ = Gmail.authorize(clientID: pos[0], clientSecret: pos[1])
+
+case "gmail":
+    let store = Store(dbPath)
+    let (n, skip, status) = Gmail.ingest(into: store,
+        limit: Int(opt("--limit", "500")) ?? 500,
+        query: opt("--query", "newer_than:30d"))
+    store.checkpoint()
+    print("gmail: +\(n) ingested · \(skip) skipped · \(status)")
+    print("total events now \(store.count())")
 
 case "browser":
     let store = Store(dbPath)
@@ -98,9 +132,35 @@ case "bar":
 
     var hotKeyRef: EventHotKeyRef?
     var hkID = EventHotKeyID(signature: OSType(0x45584f43), id: 1)   // 'EXOC'
-    // ⌥Space — deliberately not ⌘Space (Spotlight) or ⌥⌘Space (Finder search)
-    RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), hkID,
-                        GetApplicationEventTarget(), 0, &hotKeyRef)
+    // Default ⌃⌥Space. Deliberately NOT:
+    //   ⌘Space   Spotlight
+    //   ⌥⌘Space  Finder search window
+    //   ⌃⌘Space  Emoji & Symbols picker
+    //   ⌥Space   inserts a NON-BREAKING SPACE in most text fields — it is a real
+    //            character, so binding it silently corrupts typing.
+    let keyMap: [String: UInt32] = ["space": UInt32(kVK_Space), "e": UInt32(kVK_ANSI_E),
+                                    "j": UInt32(kVK_ANSI_J), "k": UInt32(kVK_ANSI_K),
+                                    "m": UInt32(kVK_ANSI_M), "slash": UInt32(kVK_ANSI_Slash)]
+    let spec0 = opt("--hotkey", "ctrl+opt+space").lowercased()
+    var mods: UInt32 = 0
+    for part in spec0.split(separator: "+") {
+        switch part {
+        case "ctrl", "control": mods |= UInt32(controlKey)
+        case "opt", "option", "alt": mods |= UInt32(optionKey)
+        case "cmd", "command": mods |= UInt32(cmdKey)
+        case "shift": mods |= UInt32(shiftKey)
+        default: break
+        }
+    }
+    let keyName = spec0.split(separator: "+").last.map(String.init) ?? "space"
+    let keyCode = keyMap[keyName] ?? UInt32(kVK_Space)
+    if mods == 0 { mods = UInt32(controlKey) | UInt32(optionKey) }
+    let regStatus = RegisterEventHotKey(keyCode, mods, hkID,
+                                        GetApplicationEventTarget(), 0, &hotKeyRef)
+    if regStatus != noErr {
+        print("warning: could not register \(spec0) (status \(regStatus)) — it may already be taken.")
+        print("         try e.g. --hotkey ctrl+opt+e")
+    }
     var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
                              eventKind: UInt32(kEventHotKeyPressed))
     let ctx = Unmanaged.passUnretained(bar).toOpaque()
@@ -116,7 +176,7 @@ case "bar":
         bar.field.stringValue = prefill
         bar.runSearch()
     }
-    print("everything-bar running.  ⌥Space to toggle · Esc to dismiss · Ctrl-C to quit")
+    print("everything-bar running.  \(spec0) to toggle · Esc to dismiss · Ctrl-C to quit")
     print("  \(store.count()) events indexed")
     bar.show()
     app.run()
@@ -439,8 +499,12 @@ default:
       exo perms                     what's granted
       exo ingest [--days N] [--files N]
                                     ingest Claude Code transcripts (zero permissions)
-      exo bar                       everything-bar: ⌥Space floating search
+      exo bar [--hotkey ctrl+opt+space]
+                                    everything-bar floating search
       exo fs [--seconds N]          watch the home dir via FSEvents (resumable)
+      exo gmail-auth <id> <secret>  one-time OAuth (see SETUP-GMAIL.md)
+      exo gmail [--query "newer_than:30d"]
+                                    ingest Gmail (restricted scope, personal-use exempt)
       exo browser [--days N]        Safari/Chrome/Brave/Edge history (needs FDA)
       exo imessage [--days N]       iMessage chat.db (needs FDA)
       exo capture [--interval 2] [--once]
