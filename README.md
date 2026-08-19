@@ -10,10 +10,10 @@ Research: [`portfolio-research/PASS-4-exocortex-crossportfolio-research.md`](../
 
 | Component | Status | Headline |
 |---|---|---|
-| **[`exo/`](exo/)** — Phase 0: capture → SQLite/FTS5 → search | ✅ built + runs | Live AX capture, BM25 + snippet, content-hash dedup, capture-exclusion at the source |
+| **[`exo/`](exo/)** — Phase 1: capture fleet → SQLite/FTS5 → search | ✅ built, **7/7 tests** | 3 sources incl. Claude Code transcripts (zero permissions, 885 events in 1.2s), trust ladder, scheduled retention + litigation hold, capture-exclusion at the source |
 | **[`mcp-bus/`](mcp-bus/)** — the memory contract | ✅ **v1.0.0 FROZEN** | 9 tools, 4 trust tiers; invariants proven by smoke tests |
 
-## exo — Phase 0
+## exo — Phase 1
 
 Its entire job is to answer one question after two weeks of real use: **did you search it?**
 Every dead life-log in the landscape died on that answer; finding out costs 20 hours, not 2,000.
