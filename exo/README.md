@@ -30,7 +30,9 @@ bash build/build.sh          # -> build/exo
 
 | Source | Permission | Trust assigned | Notes |
 |---|---|---|---|
-| **`claudecode`** | **none** | `user`→`self`, `assistant`→`untrusted` | The headline source: 1,209 files / 1.6 GB on this machine, ~53 MB/day. Ingests only `text` blocks — `tool_use`/`tool_result`/`thinking` are most of the bytes and almost none of the meaning |
+| **`claudecode`** | **none** | `user`→`self`, `assistant`→`untrusted` | 1,209 files / 1.6 GB, ~53 MB/day. Ingests only `text` blocks — `tool_use`/`tool_result`/`thinking` are most of the bytes and almost none of the meaning |
+| **`imessage`** | **Full Disk Access** | mine→`self`, theirs→`third_party` | 380,942 messages, **94.4% carry plain `text`** — the `attributedBody` typedstream problem is a 5.6% tail, counted and skipped rather than half-parsed |
+| **`browser.*`** | **Full Disk Access** | `untrusted` (`web`) | Safari + Chrome/Brave/Edge. Opened `?immutable=1` (the browser holds a WAL lock). **Chrome's profile dir is now TCC-protected** — pre-2025 guides are wrong |
 | `ax.focus` | Accessibility | `untrusted` (`ocr`) | The AX tree of a webpage is whatever the page says |
 | `clipboard` | none | `untrusted` (`ocr`) | Origin unknown by definition |
 
@@ -44,6 +46,7 @@ bash build/build.sh          # -> build/exo
 | `text` | forever | ~6 GB/decade, cheaper than the vectors it generates |
 | `raw_frame` | 21 days | 228 GB budget makes the pixel tier a cache, not an archive |
 | `sensitive` | 30 days | T3: health, finance, legal |
+| `correspondence` | 5 years | Messages **other people** sent me — their data, deliberately shorter than my own, but long enough to be useful. Messages.app remains the system of record |
 | `third_party` | 14 days | Shortest of all (*Ryneš* C-212/13) |
 
 The policy is written with an **effective date at store creation**, expiry runs on a schedule, every

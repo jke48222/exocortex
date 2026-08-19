@@ -53,6 +53,30 @@ case "ingest":
     print("claudecode: +\(n) ingested, \(skip) skipped, \(red) secret-shaped lines redacted")
     print("  \(String(format: "%.1f", dt))s · total events now \(store.count())")
 
+case "browser":
+    let store = Store(dbPath)
+    let rep = Browser.ingest(into: store, limit: Int(opt("--limit", "20000")) ?? 20000,
+                             days: Int(opt("--days", "0")) ?? 0)
+    store.checkpoint()
+    if rep.isEmpty { print("no browser history found") }
+    for (name, n, status) in rep {
+        print("  \(name.padding(toLength: 8, withPad: " ", startingAt: 0)) +\(n)  \(status)")
+    }
+    print("total events now \(store.count())")
+
+case "imessage":
+    let store = Store(dbPath)
+    let (n, blob, excl, status) = IMessage.ingest(into: store,
+        limit: Int(opt("--limit", "20000")) ?? 20000, days: Int(opt("--days", "0")) ?? 0)
+    store.checkpoint()
+    print("imessage: +\(n) ingested · \(blob) skipped (attributedBody typedstream) · \(excl) excluded · \(status)")
+    if blob > 0 {
+        print("  note: those \(blob) rows need `imessage-exporter` as a subprocess (GPL-3.0,")
+        print("        cannot be linked). Skipped rather than half-parsed — a naive NSString")
+        print("        regex recovered only 13 of 40 sampled blobs.")
+    }
+    print("total events now \(store.count())")
+
 case "capture":
     let store = Store(dbPath)
     let interval = Double(opt("--interval", "2")) ?? 2
@@ -371,6 +395,8 @@ default:
       exo perms                     what's granted
       exo ingest [--days N] [--files N]
                                     ingest Claude Code transcripts (zero permissions)
+      exo browser [--days N]        Safari/Chrome/Brave/Edge history (needs FDA)
+      exo imessage [--days N]       iMessage chat.db (needs FDA)
       exo capture [--interval 2] [--once]
                                     AX-tree + clipboard capture loop
       exo search <query> [--hybrid] [--min-trust verified] [--limit N]
