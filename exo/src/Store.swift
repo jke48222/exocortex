@@ -133,8 +133,10 @@ final class Store {
         """)
         exec("""
         CREATE TABLE IF NOT EXISTS vectors(
-          seq INTEGER PRIMARY KEY REFERENCES events(seq) ON DELETE CASCADE,
-          provider TEXT NOT NULL, bits INTEGER NOT NULL, vec BLOB NOT NULL) STRICT;
+          seq INTEGER NOT NULL REFERENCES events(seq) ON DELETE CASCADE,
+          chunk INTEGER NOT NULL DEFAULT 0,
+          provider TEXT NOT NULL, bits INTEGER NOT NULL, vec BLOB NOT NULL,
+          PRIMARY KEY (seq, chunk, provider)) STRICT;
         """)
         exec("""
         CREATE TABLE IF NOT EXISTS retention_policy(
@@ -222,11 +224,12 @@ final class Store {
         sqlite3_prepare_v2(db, "SELECT content_hash FROM events ORDER BY seq DESC LIMIT 1;", -1, &st, nil)
         return sqlite3_step(st) == SQLITE_ROW ? String(cString: sqlite3_column_text(st, 0)) : nil
     }
-    func putVector(seq: Int64, provider: String, bits: Int, vec: [UInt8]) {
+    func putVector(seq: Int64, chunk: Int = 0, provider: String, bits: Int, vec: [UInt8]) {
         var st: OpaquePointer?; defer { sqlite3_finalize(st) }
-        sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO vectors(seq,provider,bits,vec) VALUES(?,?,?,?);", -1, &st, nil)
-        sqlite3_bind_int64(st, 1, seq); bind(st, 2, provider); sqlite3_bind_int(st, 3, Int32(bits))
-        _ = vec.withUnsafeBytes { sqlite3_bind_blob(st, 4, $0.baseAddress, Int32(vec.count), SQLITE_TRANSIENT) }
+        sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO vectors(seq,chunk,provider,bits,vec) VALUES(?,?,?,?,?);", -1, &st, nil)
+        sqlite3_bind_int64(st, 1, seq); sqlite3_bind_int(st, 2, Int32(chunk))
+        bind(st, 3, provider); sqlite3_bind_int(st, 4, Int32(bits))
+        _ = vec.withUnsafeBytes { sqlite3_bind_blob(st, 5, $0.baseAddress, Int32(vec.count), SQLITE_TRANSIENT) }
         sqlite3_step(st)
     }
 
@@ -235,7 +238,7 @@ final class Store {
         var st: OpaquePointer?; defer { sqlite3_finalize(st) }
         let sql = """
         SELECT e.seq, coalesce(e.title,'')||' '||coalesce(e.text,'') FROM events e
-        LEFT JOIN vectors v ON v.seq=e.seq AND v.provider=?
+        LEFT JOIN vectors v ON v.seq=e.seq AND v.provider=? AND v.chunk=0
         WHERE v.seq IS NULL AND length(coalesce(e.text,''))>0 LIMIT ?;
         """
         sqlite3_prepare_v2(db, sql, -1, &st, nil)
