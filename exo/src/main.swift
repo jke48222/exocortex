@@ -78,6 +78,46 @@ case "capture":
 case "embed":
     let store = Store(dbPath)
     let bits = Int(opt("--bits", "256")) ?? 256
+    let useMLX = opt("--provider", "mlx") == "mlx"
+    if useMLX {
+        // real semantic embeddings via the MLX sidecar
+        let prov = Embed.qwenProvider
+        let batch = Int(opt("--limit", "2000")) ?? 2000
+        var done = 0; let t0 = Date()
+        while done < batch {
+            let todo = store.unvectorized(provider: prov, limit: min(64, batch - done))
+            if todo.isEmpty { break }
+            // one vector per CHUNK, not per document
+            var pieces: [(Int64, String)] = []
+            var owner: [Int: (Int64, Int)] = [:]          // synthetic id -> (seq, chunk)
+            var synth = 0
+            for (seq, text) in todo {
+                for (ci, c) in Chunker.chunks(text).enumerated() {
+                    pieces.append((Int64(synth), c)); owner[synth] = (seq, ci); synth += 1
+                }
+            }
+            let res = EmbedMLX.embed(pieces, bits: bits)
+            store.exec("BEGIN;")
+            var covered = Set<Int64>()
+            for r in res where r.vec.count == bits / 8 {
+                if let (seq, ci) = owner[Int(r.id)] {
+                    store.putVector(seq: seq, chunk: ci, provider: prov, bits: bits, vec: r.vec)
+                    covered.insert(seq)
+                }
+            }
+            for (id, _) in todo where !covered.contains(id) {
+                store.putVector(seq: id, chunk: 0, provider: prov, bits: bits,
+                                vec: [UInt8](repeating: 0, count: bits/8))
+            }
+            store.exec("COMMIT;")
+            done += todo.count
+            FileHandle.standardError.write("  \(done) embedded…\r".data(using: .utf8)!)
+        }
+        let dt = Date().timeIntervalSince(t0)
+        print("\nembedded \(done) rows via \(prov) at \(bits) bits in \(String(format: "%.1f", dt))s"
+            + (dt > 0 && done > 0 ? "  ·  \(String(format: "%.1f", Double(done)/dt))/s" : ""))
+        break
+    }
     let batch = Int(opt("--limit", "5000")) ?? 5000
     guard Embed.vector("warmup") != nil else { print("embedding provider unavailable"); break }
     let t0 = Date(); var n = 0, failed = 0
@@ -149,12 +189,22 @@ case "search":
         // BM25 ∪ vector, fused by RRF(k=60). Rank-only fusion so a future embedding-model
         // swap needs no recalibration.
         let bits = Int(opt("--bits", "256")) ?? 256
-        let idx = store.loadVectors(provider: Embed.provider, bits: bits)
-        guard idx.count > 0, let qv = Embed.embedBinary(q, bits: bits) else {
+        let prov = opt("--provider", "mlx") == "mlx" ? Embed.qwenProvider : Embed.provider
+        var idx = store.loadVectors(provider: prov, bits: bits)
+        if idx.count == 0 { idx = store.loadVectors(provider: Embed.provider, bits: bits) }
+        let qvec: [UInt8]? = (prov == Embed.qwenProvider)
+            ? EmbedMLX.embed([(0, q)], bits: bits).first?.vec
+            : Embed.embedBinary(q, bits: bits)
+        guard idx.count > 0, let qv = qvec else {
             print("no vectors yet — run `exo embed` first"); break
         }
         let lex = store.search(q, limit: 50, minTrust: mt.isEmpty ? nil : mt).map { $0.seq }
-        let vecHits = idx.search(qv, k: 50).map { Int($0.0) }
+        var seen = Set<Int>(); var vecHits: [Int] = []
+        for (sid, _) in idx.search(qv, k: 300) {          // over-fetch: chunks collapse
+            let s = Int(sid)
+            if seen.insert(s).inserted { vecHits.append(s) }
+            if vecHits.count >= 50 { break }
+        }
         let fused = RRF.fuse([lex, vecHits]).prefix(limit)
         let meta = store.byIDs(fused.map { Int64($0.0) })
         print("hybrid: \(lex.count) lexical ∪ \(vecHits.count) vector over \(idx.count) vectors → RRF k=60\n")
@@ -243,7 +293,7 @@ default:
       exo capture [--interval 2] [--once]
                                     AX-tree + clipboard capture loop
       exo search <query> [--hybrid] [--min-trust verified] [--limit N]
-      exo embed [--bits 256]        embed rows that lack a vector
+      exo embed [--provider mlx|nl] embed rows that lack a vector
       exo bench [--bits 256]        measure brute-force scan throughput
       exo retention [--apply]       run scheduled expiry (dry-run by default)
       exo hold on|off [--reason ..] litigation hold: suspend ALL expiry

@@ -15,6 +15,7 @@ import NaturalLanguage
 /// decade is ~38 hours and $0.39 (Area D §9).
 enum Embed {
     static let provider = "nlembedding.en.v1"
+    static let qwenProvider = "qwen3-emb-0.6b-4bit-dwq"
 
     private static let sentence: NLEmbedding? = NLEmbedding.sentenceEmbedding(for: .english)
 
@@ -52,5 +53,97 @@ enum Embed {
 
     static func embedBinary(_ text: String, bits: Int) -> [UInt8]? {
         vector(text).map { binarize($0, bits: bits) }
+    }
+}
+
+
+/// Out-of-process embedding via the MLX sidecar (`tools/embed_qwen3.py`).
+///
+/// Qwen3-Embedding-0.6B, Apache-2.0. PASS-4 Area D ranked EmbeddingGemma first and called
+/// this "a genuinely close call"; Qwen3 wins on a practical point the research flagged —
+/// the Gemma weights are license-gated on HuggingFace, Apache-2.0 is not.
+///
+/// Binary quantization happens Python-side so only 32 B/vector crosses the boundary, and
+/// packbits is MSB-first to match `Embed.binarize`.
+enum Chunker {
+    /// Sliding-window chunking. The unit of retrieval must be a passage, not a document:
+    /// a 20,000-char transcript truncated to its first 1,000 chars produces a vector that
+    /// never saw the text you are searching for. Measured directly — `arcminute` sat at
+    /// char 19,410 of a 20,000-char doc and was invisible to whole-doc embedding.
+    static func chunks(_ text: String, size: Int = 900, overlap: Int = 200) -> [String] {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard t.count > size else { return t.isEmpty ? [] : [t] }
+        var out: [String] = []
+        let chars = Array(t)
+        var i = 0
+        let step = max(1, size - overlap)
+        while i < chars.count {
+            out.append(String(chars[i..<min(chars.count, i + size)]))
+            if i + size >= chars.count { break }
+            i += step
+            if out.count >= 40 { break }        // cap pathological documents
+        }
+        return out
+    }
+}
+
+enum EmbedMLX {
+    struct Result { let id: Int64; let vec: [UInt8] }
+
+    static func scriptPath() -> String {
+        let exe = URL(fileURLWithPath: CommandLine.arguments[0])
+            .resolvingSymlinksInPath().deletingLastPathComponent()
+        // build/ -> exo/ -> tools/
+        return exe.deletingLastPathComponent()
+            .appendingPathComponent("tools/embed_qwen3.py").path
+    }
+
+    /// Runs one batch through the sidecar. Model load is amortized across the batch.
+    static func embed(_ items: [(Int64, String)], bits: Int) -> [Result] {
+        guard !items.isEmpty else { return [] }
+        let script = scriptPath()
+        guard FileManager.default.fileExists(atPath: script) else {
+            FileHandle.standardError.write("sidecar not found: \(script)\n".data(using: .utf8)!)
+            return []
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["python3", script, "--bits", String(bits)]
+        let stdin = Pipe(), stdout = Pipe()
+        p.standardInput = stdin; p.standardOutput = stdout
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch {
+            FileHandle.standardError.write("sidecar failed: \(error)\n".data(using: .utf8)!); return []
+        }
+
+        // feed on a background thread so a large batch cannot deadlock on pipe buffers
+        DispatchQueue.global().async {
+            for (id, text) in items {
+                let obj: [String: Any] = ["id": id, "text": text]
+                if let d = try? JSONSerialization.data(withJSONObject: obj) {
+                    stdin.fileHandleForWriting.write(d)
+                    stdin.fileHandleForWriting.write("\n".data(using: .utf8)!)
+                }
+            }
+            try? stdin.fileHandleForWriting.close()
+        }
+
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+
+        var out: [Result] = []
+        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
+            guard let d = line.data(using: .utf8),
+                  let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
+                  let id = (o["id"] as? NSNumber)?.int64Value,
+                  let hex = o["hex"] as? String else { continue }
+            var bytes = [UInt8](); bytes.reserveCapacity(hex.count / 2)
+            var i = hex.startIndex
+            while i < hex.endIndex, let j = hex.index(i, offsetBy: 2, limitedBy: hex.endIndex) {
+                bytes.append(UInt8(hex[i..<j], radix: 16) ?? 0); i = j
+            }
+            out.append(Result(id: id, vec: bytes))
+        }
+        return out
     }
 }

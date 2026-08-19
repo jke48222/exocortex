@@ -37,7 +37,7 @@ latency, and it excludes top-k bookkeeping and the int8 rescore tier.
 
 ---
 
-## 2. Embedding quality — Apple's NLEmbedding fails the job embeddings exist for
+## 2. Embedding quality — three rounds, and the bottleneck moved twice
 
 The index is deliberately model-agnostic; `NLEmbedding` was used because it ships with the OS and needs
 no downloads. PASS-4 Area D called it *"a trap for this use case"* — 512 dims, a short sequence limit,
@@ -61,8 +61,67 @@ and it is exactly the component the design isolates for replacement.** Swapping 
 @ Q8 via MLX (the Area D pick) changes one function, `Embed.vector`. It is cheap because the raw text
 is kept forever — re-embedding a decade is ~38 hours and $0.39.
 
-**Do not read the hybrid results as a quality claim.** RRF fusion, rank provenance and the binary index
-are verified working; semantic recall is pending a real model.
+### Round 2 — the real model, and a bug the probe exposed
+
+MLX 0.32.1 + **Qwen3-Embedding-0.6B-4bit-DWQ** (Apache-2.0; chosen over the Area D pick
+EmbeddingGemma because Gemma's weights are **license-gated on HuggingFace** and Apache-2.0 is not).
+
+At the unit level the model is unambiguously good — Hamming distance from *"how accurate is the brass
+planet mechanism"*: **63 to an orrery sentence, 84 to sourdough, 87 to a popcount sentence.** Correct
+ordering, clear margin.
+
+**But end-to-end it still scored 0/3.** The cause was not the model:
+
+| gold term | document length | term appears at char |
+|---|---:|---:|
+| `arcminute` | 20,000 | **19,410** |
+| `popcount` | 20,000 | **11,882** |
+| `spoliation` | 2,661 | **1,419** |
+
+**Every match sat beyond the 1,000-char embedding window. The vector never saw the text being searched
+for.** Whole-document embedding is the wrong unit of retrieval — which PASS-4 Area D §9 already said
+("sane chunking, 5-minute semantic segments"), and which was simply not implemented.
+
+Fixed with a sliding-window chunker (900 chars, 200 overlap, one vector per chunk, over-fetch then
+collapse chunks back to their parent event). A 17,340-char document now yields 25 vectors; the corpus
+went from 885 vectors to **2,112 over 885 events**.
+
+### Round 3 — chunked, and the honest number
+
+| probe | 256-bit | 1024-bit |
+|---|---|---|
+| `arcminute` ← "how accurate is the brass planet mechanism" | miss | miss |
+| `popcount` ← "measuring how fast the vector scan runs" | **vec#44** | **vec#25** |
+| `spoliation` ← "deleting records after a lawsuit starts is a problem" | miss | miss |
+
+**Width is not the constraint.** 1024-bit costs 4× the storage (128 B/vec; 11.6 GB at 91M vs 2.9 GB)
+and buys one rank improvement, not a fix.
+
+The strict gold-document metric is also too harsh — for a *paraphrase* query the best answer may
+legitimately be a different document. On the looser topical measure, **2 of the top 6 vector hits for
+the orrery paraphrase were genuinely relevant.** Weak but clearly nonzero.
+
+### The identified gap — and it is again something the research specified
+
+**Binary-only search is shipped; the rescore tier is not.** Area D §7.1 is explicit that binary
+quantization preserves ~96% of retrieval quality **only with a rescore step** — retrieve
+`rescore_multiplier × k` candidates by Hamming, then re-rank that shortlist against int8 or float
+vectors. The design called for exactly two tiers (binary @256d for the scan, int8 @256d mmap'd for the
+rescore) and **only the first is built.** Searching on 1-bit-per-dimension distances alone and
+expecting full quality was never the plan; it is the most likely explanation for the remaining gap,
+and it is the next thing to build.
+
+**Do not read the current hybrid numbers as a quality ceiling.** Verified working: chunking, RRF
+fusion, rank provenance, the binary index, and the 17 ms parallel scan. Not yet built: the rescore
+tier. Quality should be re-measured after it exists, not before.
+
+### Throughput
+
+| provider | rows/s | note |
+|---|---:|---|
+| `NLEmbedding` (built-in) | 56 | fails the paraphrase test |
+| Qwen3-0.6B-4bit via MLX, unchunked | 41 | |
+| Qwen3-0.6B-4bit via MLX, chunked | 9–19 | ~2.4 vectors per event |
 
 ---
 
