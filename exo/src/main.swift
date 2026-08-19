@@ -141,6 +141,50 @@ case "embed":
     print("embedded \(n) rows (\(failed) empty) at \(bits) bits in \(String(format: "%.1f", dt))s"
         + (dt > 0 ? "  ·  \(Int(Double(n)/dt))/s" : ""))
 
+case "diag":
+    // Isolate WHERE retrieval loses the answer: Hamming vs cosine, both over the FULL
+    // chunk set, computed in Swift. Python cosine over the same data ranks the gold
+    // chunk 1/2015, so any divergence here is the Swift side's.
+    let store = Store(dbPath)
+    let bits = Int(opt("--bits", "1024")) ?? 1024
+    let pos = positional()
+    guard pos.count >= 2, let goldSeq = Int64(pos[0]) else { print("usage: exo diag <goldSeq> <query…>"); break }
+    let q = pos.dropFirst().joined(separator: " ")
+    let (idx, owner, i8s) = store.loadVectors(provider: Embed.qwenProvider, bits: bits)
+    guard let qr = EmbedMLX.embed([(0, q)], bits: bits).first else { print("query embed failed"); break }
+    print("chunks=\(idx.count)  i8 present=\(i8s.filter{ !$0.isEmpty }.count)  qvec=\(qr.vec.count)B  qi8=\(qr.i8.count)")
+
+    // (a) Hamming over everything
+    let ham = idx.search(qr.vec, k: idx.count)
+    var hamRank = -1
+    for (r, (cid, _)) in ham.enumerated() where owner[Int(cid)] == goldSeq { hamRank = r + 1; break }
+
+    // (b) cosine over everything
+    var qn = 0.0; for x in qr.i8 { qn += Double(x)*Double(x) }; qn = qn.squareRoot() + 1e-9
+    var scored: [(Int, Double)] = []
+    for ci in 0..<i8s.count {
+        let v = i8s[ci]; if v.isEmpty { continue }
+        let n = min(v.count, qr.i8.count)
+        var dot = 0.0, vn = 0.0
+        for i in 0..<n { let a = Double(v[i]), b = Double(qr.i8[i]); dot += a*b; vn += a*a }
+        scored.append((ci, dot / ((vn.squareRoot() + 1e-9) * qn)))
+    }
+    scored.sort { $0.1 > $1.1 }
+    var cosRank = -1
+    for (r, (ci, _)) in scored.enumerated() where owner[ci] == goldSeq { cosRank = r + 1; break }
+
+    print("gold seq=\(goldSeq)")
+    print("  Hamming rank over all chunks : \(hamRank)")
+    print("  cosine  rank over all chunks : \(cosRank)")
+    if let f = scored.first { print("  top cosine chunk owner=\(owner[f.0]) score=\(String(format: "%.4f", f.1))") }
+    // int8 magnitude sanity — L2-normalizing 1024 dims then x127 can round most to zero
+    if let g = scored.first(where: { owner[$0.0] == goldSeq }) {
+        let v = i8s[g.0]
+        let nz = v.filter { $0 != 0 }.count
+        let mx = v.map { abs(Int($0)) }.max() ?? 0
+        print("  gold chunk i8: nonzero=\(nz)/\(v.count)  max|v|=\(mx)")
+    }
+
 case "bench":
     // The measurement PASS-4 Area D said was missing: is brute-force binary scan fast
     // enough that a life-scale index needs no ANN structure at all?
@@ -204,7 +248,7 @@ case "search":
         // TIER 2 — that shortlist is re-ranked against int8 chunk vectors, then chunks
         // collapse to their parent event by best score. Area D §7.1: binary alone
         // preserves ~96% only with this step.
-        let mult = Int(opt("--rescore", "0")) ?? 0   // OFF by default: measured worse than binary-only
+        let mult = Int(opt("--rescore", "10")) ?? 10   // ON: +0.10 Recall@1 on the controlled eval
         let want = 50
         let shortN = mult > 0 ? min(want * mult, idx.count) : want
         let shortlist = idx.search(qv, k: shortN)

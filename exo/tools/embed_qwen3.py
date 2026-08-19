@@ -56,10 +56,14 @@ def main():
                 take = np.pad(take, (0, a.bits - take.shape[0]))
             bits = (take > 0).astype(np.uint8)                 # sign -> 1 bit
             packed = np.packbits(bits)                         # MSB-first, matches Swift
-            # Tier 2: int8. Area D specifies binary for the SCAN and int8 for the
-            # RESCORE — binary alone preserves ~96% only when a shortlist is re-ranked.
-            # take is already L2-normalized, so it lives in [-1,1]; 127x and round.
-            i8 = np.clip(np.rint(take * 127.0), -127, 127).astype(np.int8)
+            # Tier 2: int8 rescore vectors.
+            # Scale by the vector's own max component, NOT a fixed 127. `take` is
+            # L2-normalized over 1024 dims, so components are ~1/sqrt(1024) ≈ 0.03 and a
+            # flat 127x lands them in [-12,12] — 9% of the int8 range, throwing away
+            # ~3.4 bits before the rescore has even run. Per-vector scaling is safe here
+            # because the comparison is cosine, which is scale-invariant.
+            mx = float(np.abs(take).max()) or 1.0
+            i8 = np.clip(np.rint(take / mx * 127.0), -127, 127).astype(np.int8)
             print(json.dumps({"id": rec["id"], "bits": a.bits,
                               "hex": packed.tobytes().hex(),
                               "i8": i8.tobytes().hex()}), flush=True)
