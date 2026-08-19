@@ -1,0 +1,10 @@
+.DS_Store
+._*
+# compiled binary — regenerate with exo/build/build.sh
+exo/build/exo
+# scratch databases
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc

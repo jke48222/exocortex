@@ -1,0 +1,1085 @@
+{
+  "contract_version": "1.0.0",
+  "frozen": "2026-08-19",
+  "mcp_wire_baseline": "2026-07-28",
+  "transport": "stdio",
+  "enums": {
+    "kind": [
+      "event",
+      "fact",
+      "belief",
+      "commitment",
+      "person",
+      "place",
+      "artifact"
+    ],
+    "source_kind": [
+      "typed",
+      "voice_self",
+      "own_note",
+      "own_calendar",
+      "own_file",
+      "screen_coach",
+      "email_known",
+      "email_unknown",
+      "web",
+      "ocr",
+      "transcript_other"
+    ],
+    "purpose": [
+      "oracle",
+      "companion",
+      "coding",
+      "writing",
+      "personal",
+      "briefing"
+    ],
+    "min_trust": [
+      "self",
+      "verified",
+      "third_party",
+      "untrusted"
+    ],
+    "trust": [
+      "self",
+      "verified",
+      "third_party",
+      "untrusted"
+    ]
+  },
+  "tools": [
+    {
+      "name": "memory.recall",
+      "description": "Hybrid FTS+vector+recency recall over the life log. No mass-read; k is hard-capped at 50.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "k": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 8
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "event",
+                "fact",
+                "belief",
+                "commitment",
+                "person",
+                "place",
+                "artifact"
+              ]
+            }
+          },
+          "min_trust": {
+            "type": "string",
+            "enum": [
+              "self",
+              "verified",
+              "third_party",
+              "untrusted"
+            ],
+            "default": "verified"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "oracle",
+              "companion",
+              "coding",
+              "writing",
+              "personal",
+              "briefing"
+            ]
+          }
+        },
+        "required": [
+          "query",
+          "purpose"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "event",
+                    "fact",
+                    "belief",
+                    "commitment",
+                    "person",
+                    "place",
+                    "artifact"
+                  ]
+                },
+                "occurred_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "recorded_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "trust": {
+                  "type": "string",
+                  "enum": [
+                    "self",
+                    "verified",
+                    "third_party",
+                    "untrusted"
+                  ]
+                },
+                "confidence": {
+                  "type": "number"
+                },
+                "source_kind": {
+                  "type": "string",
+                  "enum": [
+                    "typed",
+                    "voice_self",
+                    "own_note",
+                    "own_calendar",
+                    "own_file",
+                    "screen_coach",
+                    "email_known",
+                    "email_unknown",
+                    "web",
+                    "ocr",
+                    "transcript_other"
+                  ]
+                },
+                "episode_id": {
+                  "type": "string"
+                },
+                "oneline": {
+                  "type": "string",
+                  "maxLength": 36,
+                  "description": "<=36 chars, for the Oracle Phone split-flap board"
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "kind",
+                "occurred_at",
+                "trust",
+                "source_kind"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "budget_remaining": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "truncated",
+          "budget_remaining"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 1,
+        "exocortex.client_allowlist": [
+          "oracle",
+          "companion",
+          "coding",
+          "writing",
+          "personal",
+          "briefing"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    },
+    {
+      "name": "memory.timeline",
+      "description": "Bucketed episodic timeline between two instants.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "day",
+              "week",
+              "month"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "event",
+                "fact",
+                "belief",
+                "commitment",
+                "person",
+                "place",
+                "artifact"
+              ]
+            }
+          },
+          "min_trust": {
+            "type": "string",
+            "enum": [
+              "self",
+              "verified",
+              "third_party",
+              "untrusted"
+            ],
+            "default": "verified"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "granularity"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "buckets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "period": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "type": "string",
+                        "enum": [
+                          "event",
+                          "fact",
+                          "belief",
+                          "commitment",
+                          "person",
+                          "place",
+                          "artifact"
+                        ]
+                      },
+                      "occurred_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "recorded_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "trust": {
+                        "type": "string",
+                        "enum": [
+                          "self",
+                          "verified",
+                          "third_party",
+                          "untrusted"
+                        ]
+                      },
+                      "confidence": {
+                        "type": "number"
+                      },
+                      "source_kind": {
+                        "type": "string",
+                        "enum": [
+                          "typed",
+                          "voice_self",
+                          "own_note",
+                          "own_calendar",
+                          "own_file",
+                          "screen_coach",
+                          "email_known",
+                          "email_unknown",
+                          "web",
+                          "ocr",
+                          "transcript_other"
+                        ]
+                      },
+                      "episode_id": {
+                        "type": "string"
+                      },
+                      "oneline": {
+                        "type": "string",
+                        "maxLength": 36,
+                        "description": "<=36 chars, for the Oracle Phone split-flap board"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "text",
+                      "kind",
+                      "occurred_at",
+                      "trust",
+                      "source_kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "period",
+                "count"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "buckets"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 1,
+        "exocortex.client_allowlist": [
+          "personal",
+          "briefing",
+          "writing"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    },
+    {
+      "name": "memory.beliefs_at",
+      "description": "Belief version control. Answers 'what did I believe about X on date D?' over the bitemporal ledger.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "include_superseded": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "subject",
+          "as_of"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "beliefs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "type": "string"
+                },
+                "valid_from": {
+                  "type": "string"
+                },
+                "valid_to": {
+                  "type": "string"
+                },
+                "belief_from": {
+                  "type": "string"
+                },
+                "belief_to": {
+                  "type": "string"
+                },
+                "learned_at": {
+                  "type": "string"
+                },
+                "superseded_by": {
+                  "type": "string"
+                },
+                "trust": {
+                  "type": "string",
+                  "enum": [
+                    "self",
+                    "verified",
+                    "third_party",
+                    "untrusted"
+                  ]
+                },
+                "confidence": {
+                  "type": "number"
+                },
+                "confidence_src": {
+                  "type": "string",
+                  "enum": [
+                    "model_selfreport",
+                    "evidence_freq",
+                    "explicit_statement",
+                    "human_confirmed"
+                  ]
+                }
+              },
+              "required": [
+                "text",
+                "belief_from",
+                "trust"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "beliefs"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 1,
+        "exocortex.client_allowlist": [
+          "personal",
+          "coding",
+          "writing",
+          "briefing"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    },
+    {
+      "name": "memory.commitments",
+      "description": "Open/overdue commitments in both directions (I owe / owed to me).",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "done",
+              "overdue",
+              "all"
+            ],
+            "default": "open"
+          },
+          "with_person": {
+            "type": "string"
+          },
+          "due_before": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "due_after": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "commitments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "counterparty": {
+                  "type": "string"
+                },
+                "due": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "origin_episode_id": {
+                  "type": "string"
+                },
+                "trust": {
+                  "type": "string",
+                  "enum": [
+                    "self",
+                    "verified",
+                    "third_party",
+                    "untrusted"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "commitments"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 2,
+        "exocortex.client_allowlist": [
+          "companion",
+          "writing",
+          "briefing",
+          "personal"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    },
+    {
+      "name": "memory.context",
+      "description": "The push-as-pull primitive. One bounded, pre-sanitized, purpose-scoped brief at session start. Replaces a dozen unbounded recalls.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "oracle",
+              "companion",
+              "coding",
+              "writing",
+              "personal",
+              "briefing"
+            ]
+          },
+          "token_budget": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8000,
+            "default": 2000
+          },
+          "focus": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "purpose"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "brief": {
+            "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "event",
+                    "fact",
+                    "belief",
+                    "commitment",
+                    "person",
+                    "place",
+                    "artifact"
+                  ]
+                },
+                "occurred_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "recorded_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "trust": {
+                  "type": "string",
+                  "enum": [
+                    "self",
+                    "verified",
+                    "third_party",
+                    "untrusted"
+                  ]
+                },
+                "confidence": {
+                  "type": "number"
+                },
+                "source_kind": {
+                  "type": "string",
+                  "enum": [
+                    "typed",
+                    "voice_self",
+                    "own_note",
+                    "own_calendar",
+                    "own_file",
+                    "screen_coach",
+                    "email_known",
+                    "email_unknown",
+                    "web",
+                    "ocr",
+                    "transcript_other"
+                  ]
+                },
+                "episode_id": {
+                  "type": "string"
+                },
+                "oneline": {
+                  "type": "string",
+                  "maxLength": 36,
+                  "description": "<=36 chars, for the Oracle Phone split-flap board"
+                }
+              },
+              "required": [
+                "id",
+                "text",
+                "kind",
+                "occurred_at",
+                "trust",
+                "source_kind"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "budget_used": {
+            "type": "integer"
+          },
+          "redactions": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "brief",
+          "items",
+          "as_of",
+          "budget_used"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 1,
+        "exocortex.client_allowlist": [
+          "oracle",
+          "companion",
+          "coding",
+          "writing",
+          "personal",
+          "briefing"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    },
+    {
+      "name": "memory.remember",
+      "description": "Queue a memory. source_kind is a CHANNEL, not a trust level; the server assigns trust. Writes are gated by the local approval UI.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "event",
+              "fact",
+              "belief",
+              "commitment",
+              "person",
+              "place",
+              "artifact"
+            ]
+          },
+          "occurred_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source_kind": {
+            "type": "string",
+            "enum": [
+              "typed",
+              "voice_self",
+              "own_note",
+              "own_calendar",
+              "own_file",
+              "screen_coach",
+              "email_known",
+              "email_unknown",
+              "web",
+              "ocr",
+              "transcript_other"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "required": [
+          "text",
+          "kind",
+          "source_kind"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_approval",
+              "stored"
+            ]
+          },
+          "trust_assigned": {
+            "type": "string",
+            "enum": [
+              "self",
+              "verified",
+              "third_party",
+              "untrusted"
+            ]
+          },
+          "receipt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "trust_assigned"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 3,
+        "exocortex.client_allowlist": [
+          "writing",
+          "personal"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    },
+    {
+      "name": "memory.correct",
+      "description": "Bitemporal supersede (not erase). Preserves the prior belief interval; distinguishes mind-change from re-extraction upstream.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "new_text": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "new_text",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "new_id": {
+            "type": "string"
+          },
+          "superseded_id": {
+            "type": "string"
+          },
+          "valid_to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_id",
+          "superseded_id"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 3,
+        "exocortex.client_allowlist": [
+          "writing",
+          "personal"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    },
+    {
+      "name": "memory.forget",
+      "description": "Tombstone + cascade-delete to derived indexes. Requires a confirm_token issued by the LOCAL approval UI; no client can self-authorize.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string"
+          },
+          "confirm_token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "confirm_token"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "tombstoned": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "tombstoned"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": true,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 4,
+        "exocortex.client_allowlist": [
+          "personal"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    },
+    {
+      "name": "memory.provenance",
+      "description": "Trace a memory back to its source moments and forward to what it derived. Incident-response / audit surface.",
+      "inputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "outputSchema": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "episode_id": {
+            "type": "string"
+          },
+          "source_kind": {
+            "type": "string",
+            "enum": [
+              "typed",
+              "voice_self",
+              "own_note",
+              "own_calendar",
+              "own_file",
+              "screen_coach",
+              "email_known",
+              "email_unknown",
+              "web",
+              "ocr",
+              "transcript_other"
+            ]
+          },
+          "captured_at": {
+            "type": "string"
+          },
+          "capture_path": {
+            "type": "string"
+          },
+          "trust": {
+            "type": "string",
+            "enum": [
+              "self",
+              "verified",
+              "third_party",
+              "untrusted"
+            ]
+          },
+          "derived_from": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "derived_to": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "episode_id",
+          "trust"
+        ],
+        "additionalProperties": false
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false
+      },
+      "_meta": {
+        "exocortex.trust_tier": 4,
+        "exocortex.client_allowlist": [
+          "personal"
+        ],
+        "exocortex.cacheScope": "private"
+      }
+    }
+  ]
+}
