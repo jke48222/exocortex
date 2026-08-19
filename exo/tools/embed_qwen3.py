@@ -56,8 +56,13 @@ def main():
                 take = np.pad(take, (0, a.bits - take.shape[0]))
             bits = (take > 0).astype(np.uint8)                 # sign -> 1 bit
             packed = np.packbits(bits)                         # MSB-first, matches Swift
-            print(json.dumps({"id": rec["id"], "bits": a.bits, "hex": packed.tobytes().hex()}),
-                  flush=True)
+            # Tier 2: int8. Area D specifies binary for the SCAN and int8 for the
+            # RESCORE — binary alone preserves ~96% only when a shortlist is re-ranked.
+            # take is already L2-normalized, so it lives in [-1,1]; 127x and round.
+            i8 = np.clip(np.rint(take * 127.0), -127, 127).astype(np.int8)
+            print(json.dumps({"id": rec["id"], "bits": a.bits,
+                              "hex": packed.tobytes().hex(),
+                              "i8": i8.tobytes().hex()}), flush=True)
         except Exception as e:                                  # never kill the batch
             print(json.dumps({"id": rec.get("id"), "error": str(e)[:120]}), flush=True)
 
