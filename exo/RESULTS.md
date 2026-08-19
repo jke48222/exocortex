@@ -101,7 +101,64 @@ The strict gold-document metric is also too harsh — for a *paraphrase* query t
 legitimately be a different document. On the looser topical measure, **2 of the top 6 vector hits for
 the orrery paraphrase were genuinely relevant.** Weak but clearly nonzero.
 
-### Round 4 — the rescore tier, and an unresolved failure
+
+---
+
+## ⚠️ CORRECTION — Round 4's conclusion was wrong, and the cause was the evaluation
+
+Round 4 below concluded *"the int8 rescore tier consistently makes retrieval WORSE and I could not fix
+it."* **That conclusion is retracted. The rescore tier works; the probe measuring it did not.**
+
+Two defects in the evaluation, both mine:
+
+1. **Ranks were compared across different databases.** The "full-precision ceiling ranks it 1/2015"
+   figure came from one DB, the pipeline numbers from another, ingested over a different window with
+   different `seq` numbering — so they referred to *different gold documents*. Re-run apples-to-apples
+   on the same stored vectors, Python scored the gold at rank 41 and Swift at 29. **Swift was never
+   behind Python; there was no discrepancy to explain.**
+2. **The gold documents were meta-commentary.** "Gold" was defined as whichever document BM25 ranked
+   first for a rare term — but the corpus is a transcript of *building this system*, so the top hit for
+   `arcminute` was a **230-character message whose entire text reads "At full precision `arcminute`
+   ranks 1 of 2015"**. The probe was retrieving the experiment's own notes, not documents about
+   orreries. Any conclusion drawn from it was unsound.
+
+### The controlled eval
+
+`tests/retrieval_eval.py` — 20 authored documents on distinct topics, 20 paraphrase queries sharing
+minimal vocabulary with their target, ground truth known by construction rather than inferred.
+
+| width | method | Recall@1 | Recall@5 | MRR |
+|---|---|---:|---:|---:|
+| — | BM25 (lexical baseline) | 0.55 | 0.65 | 0.634 |
+| 256-bit | binary | 0.80 | 1.00 | 0.875 |
+| 256-bit | **binary + rescore** | **0.85** | 1.00 | 0.925 |
+| 512-bit | binary | 0.85 | 1.00 | 0.917 |
+| 512-bit | **binary + rescore** | **0.90** | 1.00 | 0.950 |
+| 1024-bit | binary | 0.85 | 1.00 | 0.917 |
+| 1024-bit | **binary + rescore** | **0.95** | 1.00 | 0.975 |
+
+**Three conclusions, now on solid ground:**
+
+- **Vector retrieval decisively beats lexical on paraphrase queries** — 0.85 vs 0.55 Recall@1. This is
+  the value proposition embeddings exist for, and it is real.
+- **The rescore tier helps at every width**, +0.05 to +0.10 Recall@1 and +0.05 MRR, exactly as Area D
+  §7.1 predicted. It is re-enabled by default.
+- **Width helps monotonically but with diminishing returns**: 256→1024 buys +0.15 Recall@1 with
+  rescore, at 4× the storage (32 B → 128 B per vector; 2.9 GB → 11.6 GB at 91M). **256-bit + rescore
+  (0.85) matches 1024-bit binary-only (0.85) at a quarter of the space** — so the Area D pairing of a
+  narrow binary tier *with* a rescore is the efficient point, and my earlier "binary@256d doesn't hold
+  for this model" was measuring 256-bit *without* the rescore it was always specified to have.
+
+**The lesson worth keeping.** Every number in the retracted round was real; the code did what I said it
+did. The failure was that "gold document" was inferred from the system under test instead of authored
+independently — which is precisely the flaw PASS-4 Area A identified in LoCoMo (6.4% wrong answer key,
+a judge accepting 63% of wrong answers). **I reproduced the exact methodological failure my own
+research had catalogued**, and it produced a confident, wrong, three-commit conclusion. An eval whose
+ground truth comes from the thing being evaluated is not an eval.
+
+---
+
+### Round 4 — the retracted round, kept for the record
 
 The gap identified above was built. It did **not** help, and three fixes did not change that.
 
@@ -150,9 +207,9 @@ implementation should approach it, not retreat from it. **The defect is real, un
 yet found.** `--rescore` therefore defaults to **0 (off)**, because shipping a stage that measurably
 degrades results would be worse than not shipping it.
 
-**Honest status of retrieval: partial.** Verified working — chunking, the binary scan, RRF fusion,
-rank provenance, and 17 ms at 91M vectors. Verified broken — the rescore tier. Unclosed — the gap
-between vec#16 and the ceiling's rank 1.
+**Status after the correction: retrieval works.** Chunking, binary scan, int8 rescore, RRF fusion,
+rank provenance, and 17 ms at 91M vectors are all verified — the rescore against a controlled eval.
+What was 'unclosed' was an artefact of the broken probe.
 
 ### The original gap statement — kept for the record
 
