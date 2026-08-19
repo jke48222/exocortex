@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 
 let args = Array(CommandLine.arguments.dropFirst())
 func opt(_ n: String, _ d: String) -> String {
@@ -76,6 +77,49 @@ case "imessage":
         print("        regex recovered only 13 of 40 sampled blobs.")
     }
     print("total events now \(store.count())")
+
+case "fs":
+    let store = Store(dbPath)
+    let secs = Double(opt("--seconds", "20")) ?? 20
+    print("watching \(NSHomeDirectory()) for \(Int(secs))s (FSEvents, resumable)…")
+    let n = FileEvents.watch(store: store, seconds: secs)
+    store.checkpoint()
+    print("fs: +\(n) events · total \(store.count())")
+
+case "bar":
+    // Non-activating floating panel on a global hotkey. Registered via Carbon
+    // RegisterEventHotKey, which — unlike an NSEvent global monitor — needs no
+    // Accessibility grant.
+    let store = Store(dbPath)
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)          // no Dock icon, no menu bar takeover
+    let bar = BarController(store: store)
+    bar.build()
+
+    var hotKeyRef: EventHotKeyRef?
+    var hkID = EventHotKeyID(signature: OSType(0x45584f43), id: 1)   // 'EXOC'
+    // ⌥Space — deliberately not ⌘Space (Spotlight) or ⌥⌘Space (Finder search)
+    RegisterEventHotKey(UInt32(kVK_Space), UInt32(optionKey), hkID,
+                        GetApplicationEventTarget(), 0, &hotKeyRef)
+    var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard),
+                             eventKind: UInt32(kEventHotKeyPressed))
+    let ctx = Unmanaged.passUnretained(bar).toOpaque()
+    InstallEventHandler(GetApplicationEventTarget(), { _, _, userData in
+        guard let userData else { return noErr }
+        let b = Unmanaged<BarController>.fromOpaque(userData).takeUnretainedValue()
+        DispatchQueue.main.async { b.toggle() }
+        return noErr
+    }, 1, &spec, ctx, nil)
+
+    let prefill = opt("--query", "")
+    if !prefill.isEmpty {
+        bar.field.stringValue = prefill
+        bar.runSearch()
+    }
+    print("everything-bar running.  ⌥Space to toggle · Esc to dismiss · Ctrl-C to quit")
+    print("  \(store.count()) events indexed")
+    bar.show()
+    app.run()
 
 case "capture":
     let store = Store(dbPath)
@@ -395,6 +439,8 @@ default:
       exo perms                     what's granted
       exo ingest [--days N] [--files N]
                                     ingest Claude Code transcripts (zero permissions)
+      exo bar                       everything-bar: ⌥Space floating search
+      exo fs [--seconds N]          watch the home dir via FSEvents (resumable)
       exo browser [--days N]        Safari/Chrome/Brave/Edge history (needs FDA)
       exo imessage [--days N]       iMessage chat.db (needs FDA)
       exo capture [--interval 2] [--once]

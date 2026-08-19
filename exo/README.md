@@ -23,8 +23,20 @@ bash build/build.sh          # -> build/exo
 ./build/exo embed --bits 256                # embed rows lacking a vector
 ./build/exo search retention --hybrid       # BM25 ∪ vector, fused by RRF k=60
 ./build/exo bench                           # scan throughput benchmark
+./build/exo fs --seconds 30                 # watch the home dir (resumable)
+./build/exo bar                             # everything-bar: ⌥Space to toggle
 ./build/exo stats
 ```
+
+## The everything-bar
+
+`exo bar` puts a non-activating floating panel on **⌥Space**. Phase 0's premise was *run it two
+weeks and answer honestly: did you search it?* — and a CLI biases that answer, so the interface is
+the feature. It follows the Area I rules drawn from the Remembrance Agent (1996) and the
+autocomplete post-mortem: **ignoring is free** (Esc, or click away), it **never steals focus** (your
+cursor stays where it was), it doesn't rearrange the screen, and **the one-line result is the
+product** — Rhodes found seeing the one-liner usually triggers the memory without opening anything.
+Every row carries provenance: `source · trust · app · time`, colour-coded by trust.
 
 ## Sources
 
@@ -33,6 +45,7 @@ bash build/build.sh          # -> build/exo
 | **`claudecode`** | **none** | `user`→`self`, `assistant`→`untrusted` | 1,209 files / 1.6 GB, ~53 MB/day. Ingests only `text` blocks — `tool_use`/`tool_result`/`thinking` are most of the bytes and almost none of the meaning |
 | **`imessage`** | **Full Disk Access** | mine→`self`, theirs→`third_party` | 380,942 messages, **94.4% carry plain `text`** — the `attributedBody` typedstream problem is a 5.6% tail, counted and skipped rather than half-parsed |
 | **`browser.*`** | **Full Disk Access** | `untrusted` (`web`) | Safari + Chrome/Brave/Edge. Opened `?immutable=1` (the browser holds a WAL lock). **Chrome's profile dir is now TCC-protected** — pre-2025 guides are wrong |
+| **`fs`** | FDA (outside `~`) | `verified` (`own_file`) | FSEvents with a **persisted `FSEventStreamEventId`**, so a restart replays rather than loses. Records file *events*, never contents |
 | `ax.focus` | Accessibility | `untrusted` (`ocr`) | The AX tree of a webpage is whatever the page says |
 | `clipboard` | none | `untrusted` (`ocr`) | Origin unknown by definition |
 
