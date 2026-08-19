@@ -101,7 +101,60 @@ The strict gold-document metric is also too harsh — for a *paraphrase* query t
 legitimately be a different document. On the looser topical measure, **2 of the top 6 vector hits for
 the orrery paraphrase were genuinely relevant.** Weak but clearly nonzero.
 
-### The identified gap — and it is again something the research specified
+### Round 4 — the rescore tier, and an unresolved failure
+
+The gap identified above was built. It did **not** help, and three fixes did not change that.
+
+**First, the ceiling.** Full-precision cosine over all 2,015 chunks in Python, outside the Swift
+pipeline entirely:
+
+| probe | gold event's best-chunk rank, full float |
+|---|---:|
+| `arcminute` | **1 / 2015** |
+| `popcount` | 166 / 2015 |
+| `spoliation` | 235 / 2015 |
+
+**`arcminute` ranks first.** So the model, the chunking and the corpus are jointly capable of a perfect
+answer, and any shortfall from here is the pipeline's, not the model's. Note also that `popcount` and
+`spoliation` are weak *even at the ceiling* — for a paraphrase query the strict gold document is
+sometimes simply not the best semantic answer, so those two probes are partly measuring the metric.
+
+**Then the measured matrix:**
+
+| probe | 256+rescore | 1024 binary | 1024+rescore | ceiling |
+|---|---|---|---|---|
+| `arcminute` | miss | **vec#16** | vec#29 | 1/2015 |
+| `popcount` | vec#39 | **vec#14** | vec#46 | 166/2015 |
+| `spoliation` | miss | miss | miss | 235/2015 |
+
+Two findings and one failure:
+
+**1. Binary @256d does not hold up for this model — and that contradicts the Area D recommendation.**
+The 256-bit headline was calibrated on EmbeddingGemma, which is explicitly Matryoshka-trained
+("highest Task Mean scores in its class even at 128 dims"). Qwen3-Embedding-0.6B truncated to 256 of
+1024 dims, then binarized, then run from 4-bit DWQ weights, stacks three lossy steps and loses the
+answer entirely (`arcminute`: miss at 256, vec#16 at 1024). **The recommendation is model-specific and
+was applied to the wrong model.** Default width is now 1024.
+
+**2. The int8 rescore tier consistently makes retrieval WORSE, and I could not fix it.**
+Three defects were found and corrected, and none changed the outcome:
+- the index keyed every chunk by its parent `seq`, making a document's chunks indistinguishable and
+  silently collapsing the shortlist — fixed by chunk-addressing the index
+- scoring used a raw integer dot product, which favours high-magnitude vectors after int8 rounding —
+  fixed by using cosine
+- the shortlist was under-fetched — fixed by `--rescore N` over-fetch
+
+After all three, `arcminute` still goes **vec#16 → vec#29** when the rescore is enabled. This is
+backwards: the rescore signal is exactly what scores rank 1 at the ceiling, so a correct
+implementation should approach it, not retreat from it. **The defect is real, unexplained, and not
+yet found.** `--rescore` therefore defaults to **0 (off)**, because shipping a stage that measurably
+degrades results would be worse than not shipping it.
+
+**Honest status of retrieval: partial.** Verified working — chunking, the binary scan, RRF fusion,
+rank provenance, and 17 ms at 91M vectors. Verified broken — the rescore tier. Unclosed — the gap
+between vec#16 and the ceiling's rank 1.
+
+### The original gap statement — kept for the record
 
 **Binary-only search is shipped; the rescore tier is not.** Area D §7.1 is explicit that binary
 quantization preserves ~96% of retrieval quality **only with a rescore step** — retrieve

@@ -135,7 +135,7 @@ final class Store {
         CREATE TABLE IF NOT EXISTS vectors(
           seq INTEGER NOT NULL REFERENCES events(seq) ON DELETE CASCADE,
           chunk INTEGER NOT NULL DEFAULT 0,
-          provider TEXT NOT NULL, bits INTEGER NOT NULL, vec BLOB NOT NULL,
+          provider TEXT NOT NULL, bits INTEGER NOT NULL, vec BLOB NOT NULL, i8 BLOB,
           PRIMARY KEY (seq, chunk, provider)) STRICT;
         """)
         exec("""
@@ -224,13 +224,36 @@ final class Store {
         sqlite3_prepare_v2(db, "SELECT content_hash FROM events ORDER BY seq DESC LIMIT 1;", -1, &st, nil)
         return sqlite3_step(st) == SQLITE_ROW ? String(cString: sqlite3_column_text(st, 0)) : nil
     }
-    func putVector(seq: Int64, chunk: Int = 0, provider: String, bits: Int, vec: [UInt8]) {
+    func putVector(seq: Int64, chunk: Int = 0, provider: String, bits: Int,
+                   vec: [UInt8], i8: [Int8]? = nil) {
         var st: OpaquePointer?; defer { sqlite3_finalize(st) }
-        sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO vectors(seq,chunk,provider,bits,vec) VALUES(?,?,?,?,?);", -1, &st, nil)
+        sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO vectors(seq,chunk,provider,bits,vec,i8) VALUES(?,?,?,?,?,?);", -1, &st, nil)
         sqlite3_bind_int64(st, 1, seq); sqlite3_bind_int(st, 2, Int32(chunk))
         bind(st, 3, provider); sqlite3_bind_int(st, 4, Int32(bits))
         _ = vec.withUnsafeBytes { sqlite3_bind_blob(st, 5, $0.baseAddress, Int32(vec.count), SQLITE_TRANSIENT) }
+        if let i8 { _ = i8.withUnsafeBytes { sqlite3_bind_blob(st, 6, $0.baseAddress, Int32(i8.count), SQLITE_TRANSIENT) } }
+        else { sqlite3_bind_null(st, 6) }
         sqlite3_step(st)
+    }
+
+    /// Tier-2 rescore vectors for a shortlist. Only the shortlist is loaded — at life
+    /// scale this is ~256 KB touched per query against a 23 GB on-disk tier.
+    func rescoreVectors(_ seqs: [Int64], provider: String) -> [(Int64, [Int8])] {
+        guard !seqs.isEmpty else { return [] }
+        let list = seqs.map(String.init).joined(separator: ",")
+        var st: OpaquePointer?; defer { sqlite3_finalize(st) }
+        sqlite3_prepare_v2(db, "SELECT seq, i8 FROM vectors WHERE provider=? AND i8 IS NOT NULL AND seq IN (\(list));", -1, &st, nil)
+        bind(st, 1, provider)
+        var out: [(Int64, [Int8])] = []
+        while sqlite3_step(st) == SQLITE_ROW {
+            let seq = sqlite3_column_int64(st, 0)
+            if let p = sqlite3_column_blob(st, 1) {
+                let n = Int(sqlite3_column_bytes(st, 1))
+                let buf = UnsafeRawBufferPointer(start: p, count: n)
+                out.append((seq, buf.bindMemory(to: Int8.self).map { $0 }))
+            }
+        }
+        return out
     }
 
     /// Rows still needing an embedding for this provider.
@@ -251,19 +274,30 @@ final class Store {
         return out
     }
 
-    func loadVectors(provider: String, bits: Int) -> VectorIndex {
+    /// Loads a CHUNK-addressed index. `owner[i]` is the parent event of chunk i, and
+    /// `i8[i]` is that chunk's rescore vector. Keying the index by parent `seq` (the
+    /// obvious thing) makes every chunk of a document indistinguishable, which silently
+    /// collapses the shortlist and defeats the rescore stage entirely.
+    func loadVectors(provider: String, bits: Int) -> (VectorIndex, [Int64], [[Int8]]) {
         var idx = VectorIndex(bits: bits)
+        var owner: [Int64] = []; var i8s: [[Int8]] = []
         var st: OpaquePointer?; defer { sqlite3_finalize(st) }
-        sqlite3_prepare_v2(db, "SELECT seq, vec FROM vectors WHERE provider=? AND bits=?;", -1, &st, nil)
+        sqlite3_prepare_v2(db, "SELECT seq, vec, i8 FROM vectors WHERE provider=? AND bits=? ORDER BY seq, chunk;", -1, &st, nil)
         bind(st, 1, provider); sqlite3_bind_int(st, 2, Int32(bits))
+        var ord: Int64 = 0
         while sqlite3_step(st) == SQLITE_ROW {
             let seq = sqlite3_column_int64(st, 0)
-            if let p = sqlite3_column_blob(st, 1) {
-                let n = Int(sqlite3_column_bytes(st, 1))
-                idx.add(id: seq, vector: [UInt8](UnsafeRawBufferPointer(start: p, count: n)))
-            }
+            guard let p = sqlite3_column_blob(st, 1) else { continue }
+            let n = Int(sqlite3_column_bytes(st, 1))
+            idx.add(id: ord, vector: [UInt8](UnsafeRawBufferPointer(start: p, count: n)))
+            owner.append(seq)
+            if let q = sqlite3_column_blob(st, 2) {
+                let m = Int(sqlite3_column_bytes(st, 2))
+                i8s.append(UnsafeRawBufferPointer(start: q, count: m).bindMemory(to: Int8.self).map { $0 })
+            } else { i8s.append([]) }
+            ord += 1
         }
-        return idx
+        return (idx, owner, i8s)
     }
 
     /// Fetch display rows by seq, preserving the caller's order.
