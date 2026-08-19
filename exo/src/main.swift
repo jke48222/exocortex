@@ -18,6 +18,11 @@ func positional() -> [String] {
     }
     return out
 }
+func UInt8truncating(_ v: UInt64) -> UInt8 { UInt8(truncatingIfNeeded: v) }
+func fmt(_ n: Int) -> String {
+    let f = NumberFormatter(); f.numberStyle = .decimal
+    return f.string(from: NSNumber(value: n)) ?? "\(n)"
+}
 func stamp(_ micros: Int64) -> String {
     let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"; f.timeZone = .current
     return f.string(from: Date(timeIntervalSince1970: Double(micros) / 1_000_000))
@@ -70,12 +75,101 @@ case "capture":
     var i = 0
     while true { tick(); i += 1; if i % 30 == 0 { store.checkpoint() }; Thread.sleep(forTimeInterval: interval) }
 
+case "embed":
+    let store = Store(dbPath)
+    let bits = Int(opt("--bits", "256")) ?? 256
+    let batch = Int(opt("--limit", "5000")) ?? 5000
+    guard Embed.vector("warmup") != nil else { print("embedding provider unavailable"); break }
+    let t0 = Date(); var n = 0, failed = 0
+    while true {
+        let todo = store.unvectorized(provider: Embed.provider, limit: 500)
+        if todo.isEmpty || n >= batch { break }
+        store.exec("BEGIN;")
+        for (seq, text) in todo {
+            if let b = Embed.embedBinary(text, bits: bits) {
+                store.putVector(seq: seq, provider: Embed.provider, bits: bits, vec: b); n += 1
+            } else {
+                // store a zero vector so we do not retry forever
+                store.putVector(seq: seq, provider: Embed.provider, bits: bits,
+                                vec: [UInt8](repeating: 0, count: bits/8)); failed += 1
+            }
+        }
+        store.exec("COMMIT;")
+    }
+    let dt = Date().timeIntervalSince(t0)
+    print("embedded \(n) rows (\(failed) empty) at \(bits) bits in \(String(format: "%.1f", dt))s"
+        + (dt > 0 ? "  ·  \(Int(Double(n)/dt))/s" : ""))
+
+case "bench":
+    // The measurement PASS-4 Area D said was missing: is brute-force binary scan fast
+    // enough that a life-scale index needs no ANN structure at all?
+    let bits = Int(opt("--bits", "256")) ?? 256
+    let stride = bits / 8
+    print("binary brute-force scan — Apple M5 Pro, \(bits)-bit vectors (\(stride) B each)\n")
+    print("  vectors        size    1-thread   GB/s   parallel    GB/s  speedup")
+    print("  ──────────────────────────────────────────────────────────────────────")
+    var seed: UInt64 = 0x243F6A8885A308D3
+    func rnd() -> UInt64 { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; return seed }
+    for n in [1_000_000, 10_000_000, 91_000_000] {
+        var idx = VectorIndex(bits: bits)
+        idx.reserve(n)
+        var buf = [UInt8](repeating: 0, count: stride)
+        for i in 0..<n {
+            for w in 0..<(stride/8) {
+                let r = rnd()
+                for b in 0..<8 { buf[w*8+b] = UInt8truncating(r >> (UInt64(b)*8)) }
+            }
+            idx.add(id: Int64(i), vector: buf)
+        }
+        let q = buf
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        _ = idx.scanOnly(q); _ = idx.scanOnlyParallel(q, shards: cores)   // warm
+        var s1 = Double.infinity, sp = Double.infinity
+        for _ in 0..<3 {
+            var t = Date(); _ = idx.scanOnly(q)
+            s1 = min(s1, Date().timeIntervalSince(t) * 1000)
+            t = Date(); _ = idx.scanOnlyParallel(q, shards: cores)
+            sp = min(sp, Date().timeIntervalSince(t) * 1000)
+        }
+        let gb = Double(n * stride) / 1_073_741_824.0
+        print(String(format: "  %11@  %6.2f GB  %8.1f  %7.1f  %8.1f  %6.1f  %5.1fx",
+                     fmt(n) as NSString, gb, s1, gb/(s1/1000), sp, gb/(sp/1000), s1/sp))
+    }
+    print("\n  best of 3 after warm passes; scan only, no top-k bookkeeping")
+    print("  parallel = DispatchQueue.concurrentPerform across \(ProcessInfo.processInfo.activeProcessorCount) logical cores")
+
 case "search":
     let store = Store(dbPath)
     let q = positional().joined(separator: " ")
     guard !q.isEmpty else { print("usage: exo search <query> [--min-trust verified]"); break }
     let mt = opt("--min-trust", "")
-    let hits = store.search(q, limit: Int(opt("--limit", "8")) ?? 8, minTrust: mt.isEmpty ? nil : mt)
+    let limit = Int(opt("--limit", "8")) ?? 8
+
+    if flag("--hybrid") {
+        // BM25 ∪ vector, fused by RRF(k=60). Rank-only fusion so a future embedding-model
+        // swap needs no recalibration.
+        let bits = Int(opt("--bits", "256")) ?? 256
+        let idx = store.loadVectors(provider: Embed.provider, bits: bits)
+        guard idx.count > 0, let qv = Embed.embedBinary(q, bits: bits) else {
+            print("no vectors yet — run `exo embed` first"); break
+        }
+        let lex = store.search(q, limit: 50, minTrust: mt.isEmpty ? nil : mt).map { $0.seq }
+        let vecHits = idx.search(qv, k: 50).map { Int($0.0) }
+        let fused = RRF.fuse([lex, vecHits]).prefix(limit)
+        let meta = store.byIDs(fused.map { Int64($0.0) })
+        print("hybrid: \(lex.count) lexical ∪ \(vecHits.count) vector over \(idx.count) vectors → RRF k=60\n")
+        for (id, score) in fused {
+            guard let m = meta[Int64(id)] else { continue }
+            let inL = lex.firstIndex(of: id).map { "bm25#\($0+1)" } ?? "—"
+            let inV = vecHits.firstIndex(of: id).map { "vec#\($0+1)" } ?? "—"
+            print("[\(stamp(m.0))] \(m.1) — \(m.2)")
+            print("    \(m.3.replacingOccurrences(of: "\n", with: " ").prefix(120))")
+            print("    seq=\(id) trust=\(m.4) rrf=\(String(format: "%.4f", score))  \(inL) \(inV)")
+        }
+        break
+    }
+
+    let hits = store.search(q, limit: limit, minTrust: mt.isEmpty ? nil : mt)
     if hits.isEmpty { print("no matches for: \(q)"); break }
     for h in hits {
         print("[\(stamp(h.ts))] \(h.app) — \(h.title)")
@@ -148,7 +242,9 @@ default:
                                     ingest Claude Code transcripts (zero permissions)
       exo capture [--interval 2] [--once]
                                     AX-tree + clipboard capture loop
-      exo search <query> [--min-trust verified] [--limit N]
+      exo search <query> [--hybrid] [--min-trust verified] [--limit N]
+      exo embed [--bits 256]        embed rows that lack a vector
+      exo bench [--bits 256]        measure brute-force scan throughput
       exo retention [--apply]       run scheduled expiry (dry-run by default)
       exo hold on|off [--reason ..] litigation hold: suspend ALL expiry
       exo stats                     counts, trust mix, exclusions, policy
