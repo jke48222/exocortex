@@ -30,7 +30,7 @@ bash build/build.sh          # -> build/exo
 
 ## The everything-bar
 
-`exo bar` puts a non-activating floating panel on **⌥Space**. Phase 0's premise was *run it two
+`exo bar` puts a non-activating floating panel on **⌃⌥Space** (`--hotkey` to rebind). Phase 0's premise was *run it two
 weeks and answer honestly: did you search it?* — and a CLI biases that answer, so the interface is
 the feature. It follows the Area I rules drawn from the Remembrance Agent (1996) and the
 autocomplete post-mortem: **ignoring is free** (Esc, or click away), it **never steals focus** (your
@@ -46,6 +46,7 @@ Every row carries provenance: `source · trust · app · time`, colour-coded by 
 | **`imessage`** | **Full Disk Access** | mine→`self`, theirs→`third_party` | 380,942 messages, **94.4% carry plain `text`** — the `attributedBody` typedstream problem is a 5.6% tail, counted and skipped rather than half-parsed |
 | **`browser.*`** | **Full Disk Access** | `untrusted` (`web`) | Safari + Chrome/Brave/Edge. Opened `?immutable=1` (the browser holds a WAL lock). **Chrome's profile dir is now TCC-protected** — pre-2025 guides are wrong |
 | **`fs`** | FDA (outside `~`) | `verified` (`own_file`) | FSEvents with a **persisted `FSEventStreamEventId`**, so a restart replays rather than loses. Records file *events*, never contents |
+| **`gmail`** | OAuth (one-time) | mine→`self`, theirs→`third_party` | Restricted scope, **personal-use exempt from CASA**. Refresh token in the Keychain. See **[SETUP-GMAIL.md](SETUP-GMAIL.md)** — the consent screen must be **In production**, or tokens die every 7 days |
 | `ax.focus` | Accessibility | `untrusted` (`ocr`) | The AX tree of a webpage is whatever the page says |
 | `clipboard` | none | `untrusted` (`ocr`) | Origin unknown by definition |
 
