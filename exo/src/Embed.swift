@@ -88,7 +88,7 @@ enum Chunker {
 }
 
 enum EmbedMLX {
-    struct Result { let id: Int64; let vec: [UInt8] }
+    struct Result { let id: Int64; let vec: [UInt8]; let i8: [Int8] }
 
     static func scriptPath() -> String {
         let exe = URL(fileURLWithPath: CommandLine.arguments[0])
@@ -137,12 +137,16 @@ enum EmbedMLX {
                   let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
                   let id = (o["id"] as? NSNumber)?.int64Value,
                   let hex = o["hex"] as? String else { continue }
-            var bytes = [UInt8](); bytes.reserveCapacity(hex.count / 2)
-            var i = hex.startIndex
-            while i < hex.endIndex, let j = hex.index(i, offsetBy: 2, limitedBy: hex.endIndex) {
-                bytes.append(UInt8(hex[i..<j], radix: 16) ?? 0); i = j
+            func unhex(_ h: String) -> [UInt8] {
+                var b = [UInt8](); b.reserveCapacity(h.count / 2)
+                var i = h.startIndex
+                while i < h.endIndex, let j = h.index(i, offsetBy: 2, limitedBy: h.endIndex) {
+                    b.append(UInt8(h[i..<j], radix: 16) ?? 0); i = j
+                }
+                return b
             }
-            out.append(Result(id: id, vec: bytes))
+            let i8 = (o["i8"] as? String).map { unhex($0).map { Int8(bitPattern: $0) } } ?? []
+            out.append(Result(id: id, vec: unhex(hex), i8: i8))
         }
         return out
     }

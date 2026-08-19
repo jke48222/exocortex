@@ -77,7 +77,7 @@ case "capture":
 
 case "embed":
     let store = Store(dbPath)
-    let bits = Int(opt("--bits", "256")) ?? 256
+    let bits = Int(opt("--bits", "1024")) ?? 1024
     let useMLX = opt("--provider", "mlx") == "mlx"
     if useMLX {
         // real semantic embeddings via the MLX sidecar
@@ -101,7 +101,8 @@ case "embed":
             var covered = Set<Int64>()
             for r in res where r.vec.count == bits / 8 {
                 if let (seq, ci) = owner[Int(r.id)] {
-                    store.putVector(seq: seq, chunk: ci, provider: prov, bits: bits, vec: r.vec)
+                    store.putVector(seq: seq, chunk: ci, provider: prov, bits: bits,
+                                    vec: r.vec, i8: r.i8.isEmpty ? nil : r.i8)
                     covered.insert(seq)
                 }
             }
@@ -188,26 +189,62 @@ case "search":
     if flag("--hybrid") {
         // BM25 ∪ vector, fused by RRF(k=60). Rank-only fusion so a future embedding-model
         // swap needs no recalibration.
-        let bits = Int(opt("--bits", "256")) ?? 256
+        let bits = Int(opt("--bits", "1024")) ?? 1024
         let prov = opt("--provider", "mlx") == "mlx" ? Embed.qwenProvider : Embed.provider
-        var idx = store.loadVectors(provider: prov, bits: bits)
-        if idx.count == 0 { idx = store.loadVectors(provider: Embed.provider, bits: bits) }
-        let qvec: [UInt8]? = (prov == Embed.qwenProvider)
-            ? EmbedMLX.embed([(0, q)], bits: bits).first?.vec
-            : Embed.embedBinary(q, bits: bits)
+        var (idx, owner, i8s) = store.loadVectors(provider: prov, bits: bits)
+        if idx.count == 0 { (idx, owner, i8s) = store.loadVectors(provider: Embed.provider, bits: bits) }
+        let qres: EmbedMLX.Result? = (prov == Embed.qwenProvider)
+            ? EmbedMLX.embed([(0, q)], bits: bits).first : nil
+        let qvec: [UInt8]? = qres?.vec ?? Embed.embedBinary(q, bits: bits)
         guard idx.count > 0, let qv = qvec else {
             print("no vectors yet — run `exo embed` first"); break
         }
         let lex = store.search(q, limit: 50, minTrust: mt.isEmpty ? nil : mt).map { $0.seq }
-        var seen = Set<Int>(); var vecHits: [Int] = []
-        for (sid, _) in idx.search(qv, k: 300) {          // over-fetch: chunks collapse
-            let s = Int(sid)
-            if seen.insert(s).inserted { vecHits.append(s) }
-            if vecHits.count >= 50 { break }
+        // TIER 1 — binary Hamming scan over CHUNKS produces an over-fetched shortlist.
+        // TIER 2 — that shortlist is re-ranked against int8 chunk vectors, then chunks
+        // collapse to their parent event by best score. Area D §7.1: binary alone
+        // preserves ~96% only with this step.
+        let mult = Int(opt("--rescore", "0")) ?? 0   // OFF by default: measured worse than binary-only
+        let want = 50
+        let shortN = mult > 0 ? min(want * mult, idx.count) : want
+        let shortlist = idx.search(qv, k: shortN)
+        var vecHits: [Int] = []
+        if mult > 0, let qi8 = qres?.i8, !qi8.isEmpty {
+            // COSINE, not raw dot. int8 vectors have varying norms after rounding and
+            // clipping, so an unnormalized dot systematically favours high-magnitude
+            // chunks — which ranked WORSE than the binary scan it was meant to refine.
+            var qn = 0.0
+            for x in qi8 { qn += Double(x) * Double(x) }
+            qn = (qn.squareRoot()) + 1e-9
+            var bySeq: [Int64: Double] = [:]
+            for (cid, _) in shortlist {
+                let ci = Int(cid)
+                guard ci < i8s.count else { continue }
+                let v = i8s[ci]; if v.isEmpty { continue }
+                let n = min(v.count, qi8.count)
+                var dot = 0.0, vn = 0.0
+                for i in 0..<n {
+                    let a = Double(v[i]), b = Double(qi8[i])
+                    dot += a * b; vn += a * a
+                }
+                let cos = dot / ((vn.squareRoot() + 1e-9) * qn)
+                let seq = owner[ci]
+                if cos > (bySeq[seq] ?? -.infinity) { bySeq[seq] = cos }
+            }
+            vecHits = bySeq.sorted { $0.value > $1.value }.prefix(want).map { Int($0.key) }
+        }
+        if vecHits.isEmpty {
+            var seen = Set<Int>()
+            for (cid, _) in shortlist {
+                let ci = Int(cid); guard ci < owner.count else { continue }
+                let s = Int(owner[ci])
+                if seen.insert(s).inserted { vecHits.append(s) }
+                if vecHits.count >= want { break }
+            }
         }
         let fused = RRF.fuse([lex, vecHits]).prefix(limit)
         let meta = store.byIDs(fused.map { Int64($0.0) })
-        print("hybrid: \(lex.count) lexical ∪ \(vecHits.count) vector over \(idx.count) vectors → RRF k=60\n")
+        print("hybrid: \(lex.count) lexical ∪ \(vecHits.count) vector over \(idx.count) vectors (shortlist \(shortlist.count) → int8 rescore) → RRF k=60\n")
         for (id, score) in fused {
             guard let m = meta[Int64(id)] else { continue }
             let inL = lex.firstIndex(of: id).map { "bm25#\($0+1)" } ?? "—"
@@ -295,6 +332,8 @@ default:
       exo search <query> [--hybrid] [--min-trust verified] [--limit N]
       exo embed [--provider mlx|nl] embed rows that lack a vector
       exo bench [--bits 256]        measure brute-force scan throughput
+      (search: --bits 1024 default; --rescore N enables the int8 tier, currently
+       measured WORSE than binary-only — see RESULTS.md)
       exo retention [--apply]       run scheduled expiry (dry-run by default)
       exo hold on|off [--reason ..] litigation hold: suspend ALL expiry
       exo stats                     counts, trust mix, exclusions, policy
