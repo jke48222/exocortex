@@ -1,7 +1,9 @@
-# exo — Exocortex capture fleet
+# exo — Exocortex capture fleet + retrieval
 
-**Phase 1.** Multi-source capture → SQLite/FTS5 → trust-filtered search, with the retention
-policy and capture-exclusion list shipped *now* rather than later.
+**Phases 1–2.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search,
+with the retention policy and capture-exclusion list shipped *now* rather than later.
+
+**Measured results, including one that contradicts the research: [RESULTS.md](RESULTS.md).**
 
 ## Build
 
@@ -18,6 +20,9 @@ bash build/build.sh          # -> build/exo
 ./build/exo search bitemporal belief --min-trust self
 ./build/exo retention                      # dry run; --apply to delete
 ./build/exo hold on --reason "..."         # suspend ALL expiry atomically
+./build/exo embed --bits 256                # embed rows lacking a vector
+./build/exo search retention --hybrid       # BM25 ∪ vector, fused by RRF k=60
+./build/exo bench                           # scan throughput benchmark
 ./build/exo stats
 ```
 

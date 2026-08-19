@@ -132,6 +132,11 @@ final class Store {
         END;
         """)
         exec("""
+        CREATE TABLE IF NOT EXISTS vectors(
+          seq INTEGER PRIMARY KEY REFERENCES events(seq) ON DELETE CASCADE,
+          provider TEXT NOT NULL, bits INTEGER NOT NULL, vec BLOB NOT NULL) STRICT;
+        """)
+        exec("""
         CREATE TABLE IF NOT EXISTS retention_policy(
           class TEXT PRIMARY KEY, ttl_days INTEGER, note TEXT NOT NULL,
           effective_from TEXT NOT NULL) STRICT;
@@ -217,6 +222,58 @@ final class Store {
         sqlite3_prepare_v2(db, "SELECT content_hash FROM events ORDER BY seq DESC LIMIT 1;", -1, &st, nil)
         return sqlite3_step(st) == SQLITE_ROW ? String(cString: sqlite3_column_text(st, 0)) : nil
     }
+    func putVector(seq: Int64, provider: String, bits: Int, vec: [UInt8]) {
+        var st: OpaquePointer?; defer { sqlite3_finalize(st) }
+        sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO vectors(seq,provider,bits,vec) VALUES(?,?,?,?);", -1, &st, nil)
+        sqlite3_bind_int64(st, 1, seq); bind(st, 2, provider); sqlite3_bind_int(st, 3, Int32(bits))
+        _ = vec.withUnsafeBytes { sqlite3_bind_blob(st, 4, $0.baseAddress, Int32(vec.count), SQLITE_TRANSIENT) }
+        sqlite3_step(st)
+    }
+
+    /// Rows still needing an embedding for this provider.
+    func unvectorized(provider: String, limit: Int) -> [(Int64, String)] {
+        var st: OpaquePointer?; defer { sqlite3_finalize(st) }
+        let sql = """
+        SELECT e.seq, coalesce(e.title,'')||' '||coalesce(e.text,'') FROM events e
+        LEFT JOIN vectors v ON v.seq=e.seq AND v.provider=?
+        WHERE v.seq IS NULL AND length(coalesce(e.text,''))>0 LIMIT ?;
+        """
+        sqlite3_prepare_v2(db, sql, -1, &st, nil)
+        bind(st, 1, provider); sqlite3_bind_int(st, 2, Int32(limit))
+        var out: [(Int64, String)] = []
+        while sqlite3_step(st) == SQLITE_ROW {
+            out.append((sqlite3_column_int64(st, 0),
+                        sqlite3_column_text(st, 1).map { String(cString: $0) } ?? ""))
+        }
+        return out
+    }
+
+    func loadVectors(provider: String, bits: Int) -> VectorIndex {
+        var idx = VectorIndex(bits: bits)
+        var st: OpaquePointer?; defer { sqlite3_finalize(st) }
+        sqlite3_prepare_v2(db, "SELECT seq, vec FROM vectors WHERE provider=? AND bits=?;", -1, &st, nil)
+        bind(st, 1, provider); sqlite3_bind_int(st, 2, Int32(bits))
+        while sqlite3_step(st) == SQLITE_ROW {
+            let seq = sqlite3_column_int64(st, 0)
+            if let p = sqlite3_column_blob(st, 1) {
+                let n = Int(sqlite3_column_bytes(st, 1))
+                idx.add(id: seq, vector: [UInt8](UnsafeRawBufferPointer(start: p, count: n)))
+            }
+        }
+        return idx
+    }
+
+    /// Fetch display rows by seq, preserving the caller's order.
+    func byIDs(_ seqs: [Int64]) -> [Int64: (Int64, String, String, String, String)] {
+        guard !seqs.isEmpty else { return [:] }
+        let list = seqs.map(String.init).joined(separator: ",")
+        var out: [Int64: (Int64, String, String, String, String)] = [:]
+        for r in rows("SELECT seq, ts, app, title, substr(coalesce(text,''),1,160), trust FROM events WHERE seq IN (\(list));") {
+            out[Int64(r[0]) ?? 0] = (Int64(r[1]) ?? 0, r[2], r[3], r[4], r[5])
+        }
+        return out
+    }
+
     /// Generic read helper so the CLI layer never touches raw sqlite3.
     func rows(_ sql: String) -> [[String]] {
         var st: OpaquePointer?; defer { sqlite3_finalize(st) }
