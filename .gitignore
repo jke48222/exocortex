@@ -8,3 +8,5 @@ exo/build/exo
 *.db-shm
 __pycache__/
 *.pyc
+# test helper binary
+exo/build/set_pasteboard
