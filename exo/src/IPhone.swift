@@ -90,18 +90,15 @@ enum IPhone {
         """)
     }
 
-    static func scriptPath() -> String {
-        URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("tools/iphone.py").path
-    }
+    static func scriptPath() -> String? { Paths.tool("iphone.py") }
 
     /// Run the sidecar, feeding the password on stdin. Returns (stdoutLines, stderrText).
     static func run(mode: String, udid: String, password: String,
                     sources: String = "", limit: Int = 20000) -> ([String], String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        var args = ["python3", scriptPath(), mode, "--udid", udid,
+        guard let script = scriptPath() else { return ([], Paths.missing("iphone.py")) }
+        var args = ["python3", script, mode, "--udid", udid,
                     "--path", backupRoot, "--limit", String(limit)]
         if !sources.isEmpty { args += ["--sources", sources] }
         p.arguments = args
