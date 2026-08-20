@@ -17,6 +17,22 @@ of the existing sources:
 | **iOS Safari** | mobile browsing, separate from desktop Safari |
 | **WhatsApp** | full message text, if installed |
 
+## First: Full Disk Access for your terminal
+
+If you see **"Cannot read …/MobileSync/Backup"** or **"no iOS backups found"**, the folder
+is there and the code is fine — macOS is denying access. iPhone backups sit behind Full Disk
+Access, and **the grant belongs to whichever app is running `exo` (your terminal), not to
+`exo` itself.**
+
+1. **System Settings → Privacy & Security → Full Disk Access**
+2. **+** and add your terminal app (Terminal, iTerm, Ghostty, Warp, VS Code…)
+3. **Quit and reopen the terminal** — the grant only takes effect on a fresh launch
+
+Or drag `build/exo` itself into that list to grant the binary directly.
+
+*(This is also why the same command can work in one context and not another: a process
+inherits the TCC grant of the app that launched it.)*
+
 ## Run it
 
 ```bash
