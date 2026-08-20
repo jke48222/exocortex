@@ -27,13 +27,54 @@ Restored to a scratch directory: **79 MiB, `integrity_check` = ok, 91,384 events
 live), and FTS5 search worked immediately after restore** (30 hits for a test term). A backup
 that has not been restored is not a backup.
 
-## ⚠️ This is not yet a real backup
+## Offsite — done
 
-**The repository and its password are both on the same disk as the original.** That protects
-against accidental deletion, a bad migration, and ransomware (restic snapshots are immutable
-once written). It protects against **nothing** that takes the disk: failure, theft, or fire.
+```bash
+bash tools/offsite.sh            # encrypted snapshot -> iCloud Drive
+bash tools/offsite-restore.sh    # restore the newest one
+```
 
-The 3-2-1 rule needs a second medium and an offsite copy. Two options:
+**Verified 2026-08-20: restored 175 MB, `integrity_check` ok, all 100,318 events.**
+
+Deliberately **not** a restic repo in a synced folder — restic warns against syncing a
+repository, because sync clients partially write and reorder, and a repo mutated from two
+directions corrupts. Instead each snapshot is a **sealed immutable file**
+(`exocortex-<UTC>.db.gz.age`), written once and never modified, which reduces the sync
+client's job to "copy new files, never touch old ones" — the one case every sync tool
+handles perfectly. That is the same pattern PASS-4 Area K arrived at for multi-device sync.
+
+| property | verified |
+|---|---|
+| iCloud stores ciphertext only | `age-encryption.org/v1` header; `orrery` not findable in the file |
+| Wrong key rejected | ✅ |
+| Private key on disk | **0 files** — Keychain only |
+| Encryption needs no secret | only the public key is used to write a backup |
+
+Two bugs the restore test caught, both of which would have made the backup worthless:
+
+- a glob over the space-containing iCloud path **silently matched nothing under zsh**;
+  `find` is used instead
+- **`security find-generic-password -w` returns HEX**, not text, when the stored value
+  contains newlines — `age` received hex and reported "unknown identity type". The restore
+  script detects and decodes it
+
+## ⚠️ The remaining gap is the key, not the data
+
+The data is now offsite. **The decryption key is not.** It lives in this Mac's login
+Keychain, so a disk failure or theft loses the key and every iCloud snapshot becomes
+unreadable ciphertext.
+
+**Export it and put it somewhere that is not this machine:**
+
+```bash
+security find-generic-password -s exocortex.offsite -a age_identity -w | xxd -r -p
+```
+
+Paste that into a password manager, or print it. It is ~200 bytes. PASS-4 Area K.4's
+50-year scheme is Shamir 3-of-5 on metal; a copy in 1Password is a reasonable start and
+closes the actual risk today.
+
+For a second offsite provider (different failure domain from iCloud):
 
 **Backblaze B2** — cheapest with genuinely free restore (PASS-4 Area K.3: $6.95/TB/mo, and
 **$0 egress**, versus S3 Glacier Deep Archive's 92× restore multiplier):

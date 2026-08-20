@@ -592,6 +592,22 @@ case "hold":
     Retention.setHold(store, on, reason: opt("--reason", "manual"))
     print("litigation hold \(on ? "ENABLED — retention expiry suspended" : "released")")
 
+case "offsite":
+    let script = Paths.tool("offsite.sh") ?? ""
+    if script.isEmpty { print(Paths.missing("offsite.sh")); break }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/bash")
+    p.arguments = [script]
+    try? p.run(); p.waitUntilExit()
+
+case "offsite-restore":
+    let script = Paths.tool("offsite-restore.sh") ?? ""
+    if script.isEmpty { print(Paths.missing("offsite-restore.sh")); break }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: "/bin/bash")
+    p.arguments = [script] + positional()
+    try? p.run(); p.waitUntilExit()
+
 case "stats":
     let store = Store(dbPath)
     func pad(_ s: String, _ n: Int) -> String { s.padding(toLength: n, withPad: " ", startingAt: 0) }
@@ -661,6 +677,8 @@ default:
        measured WORSE than binary-only — see RESULTS.md)
       exo retention [--apply]       run scheduled expiry (dry-run by default)
       exo hold on|off [--reason ..] litigation hold: suspend ALL expiry
+      exo offsite                   encrypted snapshot -> iCloud Drive
+      exo offsite-restore [path]    restore the newest offsite snapshot
       exo stats                     counts, trust mix, exclusions, policy
       exo seed                      synthetic events, no permissions needed
 
