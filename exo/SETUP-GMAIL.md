@@ -77,7 +77,40 @@ stored in the **login Keychain** (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`
 dotfile — a mailbox refresh token is exactly the credential the threat model says never to
 leave lying in plaintext.
 
-## 8. Ingest
+## 8. Connecting more than one account
+
+The same OAuth client works for **every** Google account — just run `gmail-auth` again and
+pick the other account in the browser:
+
+```bash
+exo gmail-auth <CLIENT_ID> <CLIENT_SECRET>   # sign in as the SECOND account
+exo accounts                                  # list what's connected
+exo gmail                                     # ingests ALL connected accounts
+exo gmail --account jalenedusei@gmail.com     # or just one
+```
+
+Refresh tokens are stored per-address (`refresh_token:<email>`), and each ingested message
+is keyed `gmail:<account>:<id>`, so two mailboxes can never overwrite or collide with each
+other.
+
+## 9. iCloud is different — it needs IMAP
+
+iCloud has no Gmail-style API. It uses IMAP, and Apple requires an **app-specific
+password** because your Apple ID has 2FA — your normal password will be rejected.
+
+1. Go to **[account.apple.com](https://account.apple.com)** → **Sign-In and Security** →
+   **App-Specific Passwords** → **+** → name it `exocortex`
+2. Copy the generated password (looks like `abcd-efgh-ijkl-mnop`)
+
+```bash
+exo imap-auth j.edusei@icloud.com abcd-efgh-ijkl-mnop
+exo imap --days 30
+```
+
+`exo` verifies the login before storing anything, and the password goes in the login
+Keychain — never a file, and never argv beyond that one command.
+
+## 10. Ingest
 
 ```bash
 ./build/exo gmail --limit 500                        # default: newer_than:30d

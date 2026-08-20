@@ -81,11 +81,66 @@ case "gmail-auth":
 
 case "gmail":
     let store = Store(dbPath)
-    let (n, skip, status) = Gmail.ingest(into: store,
-        limit: Int(opt("--limit", "500")) ?? 500,
-        query: opt("--query", "newer_than:30d"))
+    for (acct, n, skip, status) in Gmail.ingestAll(into: store,
+            limit: Int(opt("--limit", "500")) ?? 500,
+            query: opt("--query", "newer_than:30d"),
+            only: opt("--account", "")) {
+        print("  \(acct): +\(n) ingested · \(skip) skipped · \(status)")
+    }
     store.checkpoint()
-    print("gmail: +\(n) ingested · \(skip) skipped · \(status)")
+    print("total events now \(store.count())")
+
+case "accounts":
+    Gmail.migrateLegacy()
+    let g = Gmail.accounts(), i = IMAP.accounts()
+    print("gmail (OAuth):")
+    if g.isEmpty { print("  (none) — run `exo gmail-auth <id> <secret>`") }
+    for a in g { print("  \(a)") }
+    print("imap (app-specific password):")
+    if i.isEmpty { print("  (none) — run `exo imap-auth <email> <app-password>`") }
+    for a in i { print("  \(a)  @ \(IMAP.get("host:\(a)") ?? "?")") }
+
+case "imap-auth":
+    let pos = positional()
+    guard pos.count >= 2 else {
+        print("""
+        usage: exo imap-auth <email> <app-specific-password> [--host imap.mail.me.com]
+
+        iCloud has no API — it needs IMAP, and Apple requires an APP-SPECIFIC PASSWORD
+        because your Apple ID has 2FA. Your normal password will be rejected.
+
+        Generate one at: https://account.apple.com  ->  Sign-In and Security
+                         ->  App-Specific Passwords  ->  +   (name it "exocortex")
+
+        It looks like: abcd-efgh-ijkl-mnop
+        Stored in the login Keychain, never in a file.
+        """)
+        break
+    }
+    let host = opt("--host", pos[0].lowercased().contains("icloud") || pos[0].lowercased().contains("me.com")
+                   ? "imap.mail.me.com" : "imap.gmail.com")
+    print("testing \(pos[0]) @ \(host):993 …")
+    let probe = IMAP(host: host)
+    guard probe.connect() else { print("could not connect to \(host):993"); break }
+    if probe.login(pos[0], pos[1]) {
+        probe.close()
+        IMAP.setCred(pos[0], password: pos[1], host: host)
+        print("authorized \(pos[0]) — credential stored in the login Keychain.")
+    } else {
+        probe.close()
+        print("LOGIN rejected. Use an APP-SPECIFIC password (account.apple.com ->")
+        print("Sign-In and Security -> App-Specific Passwords), not your Apple ID password.")
+    }
+
+case "imap":
+    let store = Store(dbPath)
+    for (acct, n, skip, status) in IMAPIngest.run(into: store,
+            only: opt("--account", ""),
+            limit: Int(opt("--limit", "300")) ?? 300,
+            days: Int(opt("--days", "30")) ?? 30) {
+        print("  \(acct): +\(n) ingested · \(skip) skipped · \(status)")
+    }
+    store.checkpoint()
     print("total events now \(store.count())")
 
 case "browser":
@@ -503,7 +558,10 @@ default:
                                     everything-bar floating search
       exo fs [--seconds N]          watch the home dir via FSEvents (resumable)
       exo gmail-auth <id> <secret>  one-time OAuth (see SETUP-GMAIL.md)
-      exo gmail [--query "newer_than:30d"]
+      exo accounts                  list connected mail accounts
+      exo imap-auth <email> <app-pw> connect iCloud/other IMAP
+      exo imap [--days 30]          ingest IMAP mail
+      exo gmail [--query "newer_than:30d"] [--account x]
                                     ingest Gmail (restricted scope, personal-use exempt)
       exo browser [--days N]        Safari/Chrome/Brave/Edge history (needs FDA)
       exo imessage [--days N]       iMessage chat.db (needs FDA)
