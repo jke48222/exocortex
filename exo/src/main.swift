@@ -100,11 +100,55 @@ case "accounts":
     if i.isEmpty { print("  (none) — run `exo imap-auth <email> <app-password>`") }
     for a in i { print("  \(a)  @ \(IMAP.get("host:\(a)") ?? "?")") }
 
+case "iphone-auth":
+    let list = IPhone.backups()
+    guard !list.isEmpty else { print("no iOS backups found in \(IPhone.backupRoot)"); break }
+    let udid = opt("--udid", list.first!)
+    print("backup: \(udid)")
+    print("This backup is ENCRYPTED. Enter the backup password you set in Finder/iTunes.")
+    print("It is read with echo off, passed to the decoder on stdin, and stored in the")
+    print("login Keychain — it never appears in argv (visible to `ps`) or shell history.")
+    guard let pw = IPhone.promptSecret("backup password: ") else { print("cancelled"); break }
+    let (lines, err) = IPhone.run(mode: "verify", udid: udid, password: pw)
+    var ok = false, device = ""
+    for l in lines {
+        if let d = l.data(using: .utf8),
+           let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any] {
+            ok = (o["ok"] as? Bool) ?? false
+            device = (o["device"] as? String) ?? ""
+            if !ok { print("failed: \((o["error"] as? String) ?? "unknown")") }
+        }
+    }
+    if !ok, lines.isEmpty { print("decoder produced no output. \(err.prefix(200))") }
+    if ok {
+        IPhone.kcSet("password:\(udid)", pw)
+        IPhone.kcSet("udid", udid)
+        print("verified \(device). Password stored in the login Keychain.")
+        let (ls, _) = IPhone.run(mode: "list", udid: udid, password: pw)
+        for l in ls where l.contains("sources") { print("  available: \(l)") }
+    }
+
+case "iphone":
+    let store = Store(dbPath)
+    let udid = opt("--udid", IPhone.kcGet("udid") ?? IPhone.backups().first ?? "")
+    guard !udid.isEmpty else { print("no backup found"); break }
+    guard let pw = IPhone.kcGet("password:\(udid)") else {
+        print("not authorized — run `exo iphone-auth`"); break
+    }
+    let (n, skip, status) = IPhone.ingest(into: store, udid: udid, password: pw,
+        sources: opt("--sources", "calls,notes,safari,whatsapp"),
+        limit: Int(opt("--limit", "20000")) ?? 20000)
+    store.checkpoint()
+    print("iphone: +\(n) ingested · \(skip) skipped · \(status)")
+    print("total events now \(store.count())")
+
 case "imap-auth":
     let pos = positional()
-    guard pos.count >= 2 else {
+    guard pos.count >= 1 else {
         print("""
-        usage: exo imap-auth <email> <app-specific-password> [--host imap.mail.me.com]
+        usage: exo imap-auth <email> [--host imap.mail.me.com]
+               (the password is prompted for, with echo off — passing it as an argument
+                would put it in `ps` output and your shell history)
 
         iCloud has no API — it needs IMAP, and Apple requires an APP-SPECIFIC PASSWORD
         because your Apple ID has 2FA. Your normal password will be rejected.
@@ -117,14 +161,23 @@ case "imap-auth":
         """)
         break
     }
+    // Accept a password argument for backwards compatibility, but prefer the prompt.
+    let pw: String
+    if pos.count >= 2 { pw = pos[1] }
+    else {
+        guard let p = IPhone.promptSecret("app-specific password for \(pos[0]): ") else {
+            print("cancelled"); break
+        }
+        pw = p
+    }
     let host = opt("--host", pos[0].lowercased().contains("icloud") || pos[0].lowercased().contains("me.com")
                    ? "imap.mail.me.com" : "imap.gmail.com")
     print("testing \(pos[0]) @ \(host):993 …")
     let probe = IMAP(host: host)
     guard probe.connect() else { print("could not connect to \(host):993"); break }
-    if probe.login(pos[0], pos[1]) {
+    if probe.login(pos[0], pw) {
         probe.close()
-        IMAP.setCred(pos[0], password: pos[1], host: host)
+        IMAP.setCred(pos[0], password: pw, host: host)
         print("authorized \(pos[0]) — credential stored in the login Keychain.")
     } else {
         probe.close()
@@ -564,7 +617,9 @@ default:
       exo fs [--seconds N]          watch the home dir via FSEvents (resumable)
       exo gmail-auth <id> <secret>  one-time OAuth (see SETUP-GMAIL.md)
       exo accounts                  list connected mail accounts
-      exo imap-auth <email> <app-pw> connect iCloud/other IMAP
+      exo iphone-auth               unlock an encrypted iPhone backup (prompts)
+      exo iphone [--sources ...]    ingest calls/notes/safari/whatsapp
+      exo imap-auth <email>         connect iCloud/other IMAP (prompts)
       exo imap [--days 30]          ingest IMAP mail
       exo gmail [--query "newer_than:30d"] [--account x]
                                     ingest Gmail (restricted scope, personal-use exempt)
