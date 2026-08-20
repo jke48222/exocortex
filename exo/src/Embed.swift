@@ -98,56 +98,95 @@ enum EmbedMLX {
             .appendingPathComponent("tools/embed_qwen3.py").path
     }
 
-    /// Runs one batch through the sidecar. Model load is amortized across the batch.
+    /// A LONG-LIVED sidecar process.
+    ///
+    /// The first version spawned Python per batch. Model load is ~6s, so at 64 events a
+    /// batch a 60k-event corpus spent hours doing nothing but re-loading weights — the
+    /// job ran for an hour and produced zero vectors. Keeping one process alive for the
+    /// whole run pays that cost exactly once.
+    final class Session {
+        private let p = Process()
+        private let inPipe = Pipe(), outPipe = Pipe()
+        private var reader: FileHandle { outPipe.fileHandleForReading }
+        private var pending = Data()
+        private(set) var ok = false
+
+        init?(bits: Int) {
+            let script = EmbedMLX.scriptPath()
+            guard FileManager.default.fileExists(atPath: script) else { return nil }
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            p.arguments = ["python3", "-u", script, "--bits", String(bits)]  // -u: unbuffered
+            p.standardInput = inPipe; p.standardOutput = outPipe
+            p.standardError = FileHandle.nullDevice
+            do { try p.run() } catch { return nil }
+            ok = true
+        }
+
+        /// Read exactly one newline-terminated line, blocking.
+        private func readLine() -> String? {
+            while true {
+                if let r = pending.firstIndex(of: 0x0A) {
+                    let line = pending[pending.startIndex..<r]
+                    pending.removeSubrange(pending.startIndex...r)
+                    return String(decoding: line, as: UTF8.self)
+                }
+                let chunk = reader.availableData
+                if chunk.isEmpty { return nil }
+                pending.append(chunk)
+            }
+        }
+
+        func embed(_ items: [(Int64, String)]) -> [Result] {
+            guard ok, !items.isEmpty else { return [] }
+            // Write on a background thread. A pipe buffer is ~64 KB; a batch of chunks is
+            // far larger, so writing it all before reading deadlocks — we block filling
+            // stdin while the sidecar blocks filling stdout that nobody is draining.
+            let w = inPipe.fileHandleForWriting
+            DispatchQueue.global().async {
+                for (id, text) in items {
+                    let obj: [String: Any] = ["id": id, "text": text]
+                    guard let d = try? JSONSerialization.data(withJSONObject: obj) else { continue }
+                    w.write(d); w.write(Data([0x0A]))
+                }
+                if let e = try? JSONSerialization.data(withJSONObject: ["cmd": "end"]) {
+                    w.write(e); w.write(Data([0x0A]))
+                }
+            }
+            // Frame the batch with an explicit end marker. Counting replies is fragile:
+            // any input the sidecar declines to answer leaves the reader blocked in
+            // read(2) forever, because availableData blocks rather than returning EOF
+            // while the child is alive. Confirmed by sampling a hung process.
+            var out: [Result] = []
+            while let line = readLine() {
+                guard let d = line.data(using: .utf8),
+                      let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+                else { continue }
+                if o["end"] != nil { break }
+                guard let id = (o["id"] as? NSNumber)?.int64Value else { continue }
+                guard let hex = o["hex"] as? String else { out.append(Result(id: id, vec: [], i8: [])); continue }
+                func unhex(_ h: String) -> [UInt8] {
+                    var b = [UInt8](); b.reserveCapacity(h.count / 2)
+                    var i = h.startIndex
+                    while i < h.endIndex, let j = h.index(i, offsetBy: 2, limitedBy: h.endIndex) {
+                        b.append(UInt8(h[i..<j], radix: 16) ?? 0); i = j
+                    }
+                    return b
+                }
+                let i8 = (o["i8"] as? String).map { unhex($0).map { Int8(bitPattern: $0) } } ?? []
+                out.append(Result(id: id, vec: unhex(hex), i8: i8))
+            }
+            return out
+        }
+        func close() {
+            try? inPipe.fileHandleForWriting.close()
+            p.terminate()
+        }
+    }
+
+    /// One-shot convenience (used for single query embeddings).
     static func embed(_ items: [(Int64, String)], bits: Int) -> [Result] {
-        guard !items.isEmpty else { return [] }
-        let script = scriptPath()
-        guard FileManager.default.fileExists(atPath: script) else {
-            FileHandle.standardError.write("sidecar not found: \(script)\n".data(using: .utf8)!)
-            return []
-        }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        p.arguments = ["python3", script, "--bits", String(bits)]
-        let stdin = Pipe(), stdout = Pipe()
-        p.standardInput = stdin; p.standardOutput = stdout
-        p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch {
-            FileHandle.standardError.write("sidecar failed: \(error)\n".data(using: .utf8)!); return []
-        }
-
-        // feed on a background thread so a large batch cannot deadlock on pipe buffers
-        DispatchQueue.global().async {
-            for (id, text) in items {
-                let obj: [String: Any] = ["id": id, "text": text]
-                if let d = try? JSONSerialization.data(withJSONObject: obj) {
-                    stdin.fileHandleForWriting.write(d)
-                    stdin.fileHandleForWriting.write("\n".data(using: .utf8)!)
-                }
-            }
-            try? stdin.fileHandleForWriting.close()
-        }
-
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-
-        var out: [Result] = []
-        for line in String(decoding: data, as: UTF8.self).split(separator: "\n") {
-            guard let d = line.data(using: .utf8),
-                  let o = (try? JSONSerialization.jsonObject(with: d)) as? [String: Any],
-                  let id = (o["id"] as? NSNumber)?.int64Value,
-                  let hex = o["hex"] as? String else { continue }
-            func unhex(_ h: String) -> [UInt8] {
-                var b = [UInt8](); b.reserveCapacity(h.count / 2)
-                var i = h.startIndex
-                while i < h.endIndex, let j = h.index(i, offsetBy: 2, limitedBy: h.endIndex) {
-                    b.append(UInt8(h[i..<j], radix: 16) ?? 0); i = j
-                }
-                return b
-            }
-            let i8 = (o["i8"] as? String).map { unhex($0).map { Int8(bitPattern: $0) } } ?? []
-            out.append(Result(id: id, vec: unhex(hex), i8: i8))
-        }
-        return out
+        guard let s = Session(bits: bits) else { return [] }
+        defer { s.close() }
+        return s.embed(items)
     }
 }

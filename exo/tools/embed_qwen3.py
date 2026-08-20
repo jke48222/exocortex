@@ -41,9 +41,20 @@ def main():
         try:
             rec = json.loads(line)
         except json.JSONDecodeError:
+            # still emit something: the reader frames batches by counting replies, and a
+            # silent drop here blocks it forever
+            print(json.dumps({"id": None, "skip": "badjson"}), flush=True)
+            continue
+        # explicit end-of-batch marker so the caller never has to guess how many
+        # replies are coming
+        if rec.get("cmd") == "end":
+            print(json.dumps({"end": True}), flush=True)
             continue
         text = (rec.get("text") or "")[:1000]
+        # CONTRACT: exactly one output line per input line. Silently skipping blanks made
+        # the Swift caller block forever waiting for a reply that was never coming.
         if not text.strip():
+            print(json.dumps({"id": rec.get("id"), "skip": "blank"}), flush=True)
             continue
         try:
             ids = tok.encode(text, return_tensors="mlx")
