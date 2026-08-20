@@ -47,9 +47,47 @@ enum IPhone {
         return String(decoding: d, as: UTF8.self)
     }
 
+    enum Access { case ok([String]), denied, missing }
+
+    /// Distinguish "no backups" from "not permitted to look".
+    ///
+    /// `MobileSync/Backup` is TCC-protected, and `contentsOfDirectory` reports a denial
+    /// the same way it reports an empty directory once the error is swallowed — which
+    /// produced a "no iOS backups found" message for a directory that plainly contained
+    /// one. `opendir` exposes the real errno.
+    static func probe() -> Access {
+        guard FileManager.default.fileExists(atPath: backupRoot) else { return .missing }
+        errno = 0
+        guard let d = opendir(backupRoot) else {
+            return (errno == EPERM || errno == EACCES) ? .denied : .missing
+        }
+        closedir(d)
+        let all = (try? FileManager.default.contentsOfDirectory(atPath: backupRoot)) ?? []
+        return .ok(all.filter { !$0.hasPrefix(".") && $0.contains("-") })
+    }
+
     static func backups() -> [String] {
-        ((try? FileManager.default.contentsOfDirectory(atPath: backupRoot)) ?? [])
-            .filter { !$0.hasPrefix(".") }
+        if case .ok(let l) = probe() { return l }
+        return []
+    }
+
+    /// One place to explain a TCC denial, because the fix is never obvious from the error.
+    static func explainDenied() {
+        print("""
+        Cannot read \(backupRoot)
+
+        The folder exists, but macOS denied access. iPhone backups live behind
+        Full Disk Access, and the grant belongs to whichever app is RUNNING exo —
+        your terminal — not to exo itself.
+
+        Grant it:
+          System Settings > Privacy & Security > Full Disk Access
+          + and add your terminal app (Terminal, iTerm, Ghostty, Warp, VS Code…)
+          then QUIT AND REOPEN the terminal — the grant only applies to a fresh launch.
+
+        Or grant it to the binary directly by dragging this file into that list:
+          \(URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().path)
+        """)
     }
 
     static func scriptPath() -> String {
