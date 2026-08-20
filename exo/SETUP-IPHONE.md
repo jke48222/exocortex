@@ -5,17 +5,43 @@ is **47 GB, iPhone16,2, iOS 27, dated 2026-07-09** — and **encrypted**, which 
 setting to have chosen. Nothing in it, not even the file manifest, is readable without the
 backup password.
 
-## Why it's worth ingesting
+## What it actually contains — measured, not assumed
 
-It holds data that **never touches the Mac**, so it's genuinely new rather than a duplicate
-of the existing sources:
+`exo iphone-discover` enumerates the real manifest: **282,214 files, 1,484 databases.**
+Paths are resolved from that manifest rather than hardcoded, because hardcoding is what made
+Safari look absent — iOS 27 moved history to `Library/Safari/Profiles/<UUID>/History.db`.
 
-| source | what it adds |
+Ingested by default (**8,934 records from this backup**):
+
+| source | records | what it adds |
+|---|---:|---|
+| **Call history** | 4,576 | who, when, how long, answered/missed — nowhere else on disk |
+| **WhatsApp** | 2,132 | full message text |
+| **Calendar** | 1,334 | events with notes |
+| **Contacts** | 686 | names, orgs, notes |
+| **Notes** | 135 | titles **and bodies** (ungzipped from `ZICNOTEDATA.ZDATA`) |
+| **Voicemail** | 40 | sender, duration |
+| **Voice memos** | 31 | titles |
+| Safari | **0** | see below |
+
+Available but **not** ingested by default:
+
+| source | why it's opt-in |
 |---|---|
-| **Call history** | who you spoke to, when, for how long, answered or missed — nowhere else on disk |
-| **Notes** | titles from `ZICCLOUDSYNCINGOBJECT` |
-| **iOS Safari** | mobile browsing, separate from desktop Safari |
-| **WhatsApp** | full message text, if installed |
+| `health` | Medical data. Filed on the **`sensitive` retention class (30 days)**, not kept forever. Ask for it by name: `--sources health` |
+| `photos` | Metadata only (captions/dates); pixels never enter the log |
+| `sms` | Duplicates the Mac's `chat.db`, which is already ingested and more complete |
+
+## Safari history is genuinely absent, and that isn't a bug
+
+Both profile databases decrypt fine, contain **exactly** the tables queried
+(`history_items`, `history_visits`), and both are **0 rows** — while `history_tombstones`
+has entries, so the databases are live. **iOS Safari history syncs through iCloud rather
+than living in the local store**, so it simply isn't in the backup. Desktop Safari is
+already covered by the `browser.safari` source.
+
+Verified with `exo iphone-schema --sources safari`, which dumps table names and row counts
+so "0 rows" can be told apart from "wrong table names" without guessing.
 
 ## First: Full Disk Access for your terminal
 

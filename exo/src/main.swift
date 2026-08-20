@@ -135,6 +135,23 @@ case "iphone-auth":
         for l in ls where l.contains("sources") { print("  available: \(l)") }
     }
 
+case "iphone-schema":
+    guard let udid = IPhone.kcGet("udid") ?? IPhone.backups().first,
+          let pw = IPhone.kcGet("password:\(udid)") else { print("run `exo iphone-auth`"); break }
+    let (ls, er) = IPhone.run(mode: "schema", udid: udid, password: pw,
+                              sources: opt("--sources", "safari"))
+    for l in ls { print(l) }
+    if ls.isEmpty { print(er.prefix(300)) }
+
+case "iphone-discover":
+    guard let udid = IPhone.kcGet("udid") ?? IPhone.backups().first,
+          let pw = IPhone.kcGet("password:\(udid)") else {
+        print("run `exo iphone-auth` first"); break
+    }
+    let (ls, _) = IPhone.run(mode: "discover", udid: udid, password: pw,
+                             grep: opt("--grep", ""))
+    for l in ls { print(l) }
+
 case "iphone":
     let store = Store(dbPath)
     if case .denied = IPhone.probe() { IPhone.explainDenied(); break }
@@ -144,8 +161,9 @@ case "iphone":
         print("not authorized — run `exo iphone-auth`"); break
     }
     let (n, skip, status) = IPhone.ingest(into: store, udid: udid, password: pw,
-        sources: opt("--sources", "calls,notes,safari,whatsapp"),
-        limit: Int(opt("--limit", "20000")) ?? 20000)
+        sources: opt("--sources", "calls,contacts,calendar,voicemail,notes,safari,whatsapp,voicememo"),
+        limit: Int(opt("--limit", "20000")) ?? 20000,
+        verbose: flag("--verbose"))
     store.checkpoint()
     print("iphone: +\(n) ingested · \(skip) skipped · \(status)")
     print("total events now \(store.count())")
