@@ -696,6 +696,61 @@ case "forget-secrets":
     store.checkpoint()
     print("removed \(doomed.count) event(s) containing credentials · FTS index rebuilt")
 
+case "ledger-test":
+    // The distinction the whole ledger exists to preserve, proven rather than asserted.
+    let s = Store(dbPath); Ledger.migrate(s)
+    let run = Ledger.startRun(s, model: "test", version: "1", promptHash: "-", codeVersion: "-")
+    let P  = Ledger.upsertClaim(s, subject: "ledgertest", predicate: "ships_in",
+                                object: "March", polarity: 1, scope: nil,
+                                norm: "the project ships in March")
+    let nP = Ledger.upsertClaim(s, subject: "ledgertest", predicate: "ships_in",
+                                object: "March", polarity: -1, scope: nil,
+                                norm: "the project does NOT ship in March")
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  ✅ \(label)"); pass += 1 }
+        else { print("  ❌ \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+    func at(_ d: String) -> String {
+        Ledger.beliefsAt(s, subject: "ledgertest", asOf: d)
+            .map { ($0.polarity > 0 ? "P" : "notP") }.sorted().joined(separator: "+")
+    }
+
+    // 2025-03-01: I come to believe P.
+    let b1 = Ledger.mindChange(s, from: nil, toClaim: P, at: "2025-03-01T00:00:00Z",
+                               confidence: 0.7, confidenceSrc: "explicit_statement", runID: run)
+    chk("after initial belief, 2025-06 says P", at("2025-06-01T00:00:00Z"), "P")
+
+    // ── PATH A: I CHANGE MY MIND in 2026 ──
+    _ = Ledger.mindChange(s, from: b1, toClaim: nP, at: "2026-01-15T00:00:00Z",
+                          confidence: 0.85, confidenceSrc: "explicit_statement", runID: run)
+    chk("A: 2026-06 now says notP",  at("2026-06-01T00:00:00Z"), "notP")
+    chk("A: 2025-06 STILL says P",   at("2025-06-01T00:00:00Z"), "P")
+    print("     ^ a change of mind must not rewrite what I believed in 2025")
+
+    // ── PATH B: a better model re-reads the SAME 2025 moments ──
+    let before = at("2025-06-01T00:00:00Z")
+    guard let b3 = Ledger.reextraction(s, correcting: b1, toClaim: nP,
+                                       confidence: 0.9, confidenceSrc: "model_selfreport",
+                                       runID: run) else {
+        print("  ❌ reextraction returned nil"); break
+    }
+    _ = b3
+    chk("B: 2025-06 now says notP (was \(before))", at("2025-06-01T00:00:00Z"), "notP")
+    print("     ^ a re-extraction MUST rewrite it: the old answer was the machine's error")
+
+    // the belief interval itself must be untouched by path B
+    let iv = s.rows("SELECT belief_from, coalesce(belief_to,'-') FROM belief WHERE change_reason='reextraction' ORDER BY sys_from DESC LIMIT 1;")
+    chk("B: belief interval copied verbatim", iv.first.map { "\($0[0])|\($0[1])" } ?? "",
+        "2025-03-01T00:00:00Z|2026-01-15T00:00:00Z")
+
+    // and the machine remains auditable: what did the OLD extractor think?
+    let old = Ledger.asKnownAt(s, subject: "ledgertest", asOf: "2025-06-01T00:00:00Z",
+                               systemTime: "2020-01-01T00:00:00Z")
+    chk("audit: before this run existed, nothing was known", String(old.count), "0")
+
+    print("\n  \(pass) passed, \(fail) failed")
+
 case "stats":
     let store = Store(dbPath)
     func pad(_ s: String, _ n: Int) -> String { s.padding(toLength: n, withPad: " ", startingAt: 0) }
@@ -771,6 +826,7 @@ default:
       exo offsite-restore [path]    restore the newest offsite snapshot
       exo scan-secrets              audit the store for key-shaped content
       exo forget-secrets            delete anything scan-secrets finds
+      exo ledger-test               prove the mind-change / re-extraction split
       exo stats                     counts, trust mix, exclusions, policy
       exo seed                      synthetic events, no permissions needed
 
