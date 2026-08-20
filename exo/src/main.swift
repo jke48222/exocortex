@@ -101,8 +101,15 @@ case "accounts":
     for a in i { print("  \(a)  @ \(IMAP.get("host:\(a)") ?? "?")") }
 
 case "iphone-auth":
-    let list = IPhone.backups()
-    guard !list.isEmpty else { print("no iOS backups found in \(IPhone.backupRoot)"); break }
+    var list: [String] = []
+    switch IPhone.probe() {
+    case .denied:  IPhone.explainDenied(); break
+    case .missing: print("no Backup folder at \(IPhone.backupRoot)"); break
+    case .ok(let l) where l.isEmpty:
+        print("Backup folder is readable but contains no backups.")
+    case .ok(let l): list = l
+    }
+    guard !list.isEmpty else { break }
     let udid = opt("--udid", list.first!)
     print("backup: \(udid)")
     print("This backup is ENCRYPTED. Enter the backup password you set in Finder/iTunes.")
@@ -130,8 +137,9 @@ case "iphone-auth":
 
 case "iphone":
     let store = Store(dbPath)
+    if case .denied = IPhone.probe() { IPhone.explainDenied(); break }
     let udid = opt("--udid", IPhone.kcGet("udid") ?? IPhone.backups().first ?? "")
-    guard !udid.isEmpty else { print("no backup found"); break }
+    guard !udid.isEmpty else { print("no backup found in \(IPhone.backupRoot)"); break }
     guard let pw = IPhone.kcGet("password:\(udid)") else {
         print("not authorized — run `exo iphone-auth`"); break
     }
