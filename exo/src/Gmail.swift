@@ -73,6 +73,32 @@ enum Gmail {
     }
 
     // MARK: OAuth (loopback redirect — the flow Google recommends for desktop apps)
+    /// Authorized account emails, newest last.
+    static func accounts() -> [String] {
+        (keychainGet("accounts") ?? "").split(separator: ",").map(String.init).filter { !$0.isEmpty }
+    }
+    static func addAccount(_ email: String) {
+        var a = accounts()
+        if !a.contains(email) { a.append(email) }
+        keychainSet("accounts", a.joined(separator: ","))
+    }
+    /// One-time migration: the original single-account build stored an un-namespaced
+    /// `refresh_token`. Move it under its real address so a second `gmail-auth` cannot
+    /// silently overwrite the first account.
+    static func migrateLegacy() {
+        guard accounts().isEmpty, let legacy = keychainGet("refresh_token") else { return }
+        guard let cid = keychainGet("client_id"), let cs = keychainGet("client_secret") else { return }
+        let r = post("https://oauth2.googleapis.com/token", [
+            "refresh_token": legacy, "client_id": cid, "client_secret": cs,
+            "grant_type": "refresh_token"])
+        guard let tok = r?["access_token"] as? String,
+              let p = get("https://gmail.googleapis.com/gmail/v1/users/me/profile", token: tok),
+              let email = p["emailAddress"] as? String else { return }
+        keychainSet("refresh_token:\(email)", legacy)
+        addAccount(email)
+        print("migrated existing authorization -> \(email)")
+    }
+
     static func authorize(clientID: String, clientSecret: String) -> Bool {
         let listener = try? SimpleHTTP(port: 0)
         guard let listener else { print("could not open a loopback port"); return false }
@@ -98,15 +124,22 @@ enum Gmail {
             print("on first consent unless prompt=consent forces it.")
             return false
         }
-        keychainSet("refresh_token", refresh)
         keychainSet("client_id", clientID)
         keychainSet("client_secret", clientSecret)
-        print("authorized. refresh token stored in the login Keychain.")
+        // resolve which Google account this actually is, so multiple can coexist
+        var email = "unknown"
+        if let at = tok["access_token"] as? String,
+           let p = get("https://gmail.googleapis.com/gmail/v1/users/me/profile", token: at),
+           let e = p["emailAddress"] as? String { email = e }
+        keychainSet("refresh_token:\(email)", refresh)
+        addAccount(email)
+        print("authorized \(email). refresh token stored in the login Keychain.")
+        print("authorized accounts: \(accounts().joined(separator: ", "))")
         return true
     }
 
-    static func accessToken() -> String? {
-        guard let rt = keychainGet("refresh_token"),
+    static func accessToken(for email: String) -> String? {
+        guard let rt = keychainGet("refresh_token:\(email)") ?? keychainGet("refresh_token"),
               let cid = keychainGet("client_id"),
               let cs = keychainGet("client_secret") else { return nil }
         let r = post("https://oauth2.googleapis.com/token", [
@@ -143,11 +176,25 @@ enum Gmail {
         return ""
     }
 
-    static func ingest(into store: Store, limit: Int, query: String) -> (Int, Int, String) {
-        guard let token = accessToken() else { return (0, 0, "not authorized — run `exo gmail-auth`") }
-        var me = ""
+    static func ingestAll(into store: Store, limit: Int, query: String,
+                          only: String) -> [(String, Int, Int, String)] {
+        migrateLegacy()
+        let list = only.isEmpty ? accounts() : [only]
+        guard !list.isEmpty else { return [("(none)", 0, 0, "not authorized — run `exo gmail-auth`")] }
+        return list.map { acct in
+            let (i, s, st) = ingest(into: store, limit: limit, query: query, account: acct)
+            return (acct, i, s, st)
+        }
+    }
+
+    static func ingest(into store: Store, limit: Int, query: String,
+                       account: String) -> (Int, Int, String) {
+        guard let token = accessToken(for: account) else {
+            return (0, 0, "not authorized — run `exo gmail-auth`")
+        }
+        var me = account.lowercased()
         if let p = get("https://gmail.googleapis.com/gmail/v1/users/me/profile", token: token) {
-            me = (p["emailAddress"] as? String ?? "").lowercased()
+            me = (p["emailAddress"] as? String ?? account).lowercased()
         }
         var ingested = 0, skipped = 0, pageToken: String? = nil
         outer: repeat {
@@ -184,13 +231,14 @@ enum Gmail {
                 let fromMe = !me.isEmpty && from.contains(me)
                 let kind: SourceKind = fromMe ? .typed : .emailKnown
                 var e = Event(source: "gmail", sourceKind: kind)
+                e.title = hdr["subject"] ?? "(no subject)"
                 e.retention = fromMe ? "text" : "correspondence"
                 e.app = "Gmail"; e.bundle = "com.google.Gmail"
                 e.title = hdr["subject"] ?? "(no subject)"
                 e.role = fromMe ? "me" : "them"
                 e.text = String(clean.prefix(12_000))
-                e.externalID = "gmail:\(id)"
-                e.meta = ["from": hdr["from"] ?? "", "to": hdr["to"] ?? ""]
+                e.externalID = "gmail:\(me):\(id)"
+                e.meta = ["from": hdr["from"] ?? "", "to": hdr["to"] ?? "", "account": me]
                 if let ims = full["internalDate"] as? String, let ms = Int64(ims) { e.ts = ms * 1000 }
                 if store.insert(e) { ingested += 1 } else { skipped += 1 }
             }
