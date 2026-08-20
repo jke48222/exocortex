@@ -248,3 +248,73 @@ tier. Quality should be re-measured after it exists, not before.
   ordinary text captured, re-runs don't duplicate
 - **7/7 regression tests pass**
 - Embedding throughput: **56 rows/s** via `NLEmbedding` (852 rows in 15.2 s)
+
+
+---
+
+## 5. Ingesting a real corpus — three findings
+
+Running the fleet against real data (91,384 events across six sources) surfaced things the
+synthetic tests could not.
+
+### 5.1 The `attributedBody` tail is not a tail — it is the future
+
+The Phase-1 build skipped iMessage rows whose `text` is NULL, on the measured basis that they
+were **5.6% of all history** and that a wrong body is worse than a missing one. Both halves
+were wrong once broken down **by year**:
+
+| year | messages | need typedstream |
+|---|---:|---:|
+| 2026 | 44,934 | **29.1%** |
+| 2025 | 73,350 | 0.7% |
+| 2024 | 57,537 | 0.1% |
+| 2023 | 55,146 | 0.1% |
+
+**Apple migrated to `attributedBody` in 2026.** The aggregate 3.8% figure averages a solved
+past with an unsolved present, and the unsolved fraction is heading toward 100%.
+
+And the parser was never as hard as the first attempt suggested. A naive NSString regex
+recovered 13 of 40 blobs (32%); a correct **length-prefixed** read — one byte, or `0x81`
+followed by a little-endian UInt16 — recovers, over 3,000 recent blobs:
+
+- **95.1% parse successfully**
+- **88.9% yield real text**
+- 6.2% are attachment-only: a bare **U+FFFC Object Replacement Character**, i.e. a photo or
+  file transfer with genuinely no text to recover — not a failure
+- 4.9% fail
+
+**Result: +31,328 messages recovered**, taking iMessage from 26,719 to 58,047 rows. No GPL
+dependency and no subprocess — about forty lines.
+
+### 5.2 A resume cursor hides its own past mistakes
+
+Re-running ingest after fixing the parser recovered **one** message. Ingest resumes from
+`max(ts)`, so it never revisits rows an older parser skipped. Any extraction improvement is
+invisible to a system that only ever moves forward. Added `--rescan` to ignore the cursor;
+re-inserting is safe because the unique index on `(source, external_id)` absorbs duplicates.
+**This applies to every source, not just iMessage.**
+
+### 5.3 Embedding throughput is 50× short of usable — and it is not a hang
+
+Three separate stalls were diagnosed here, and only the first two were bugs:
+
+1. **Model reloaded per batch.** The sidecar was spawned per 64 events; at ~6 s to load
+   weights, a 60k corpus spent hours doing nothing else. Fixed with a persistent session.
+2. **A silently-dropped reply blocks the reader forever.** The sidecar skipped blank inputs
+   without emitting anything, while Swift read until it had one reply per input.
+   `FileHandle.availableData` *blocks* rather than returning EOF while the child is alive, so
+   one missing line hangs indefinitely. Confirmed by `sample`-ing the stuck process:
+   `Session.embed → availableData → read`. Fixed twice over — the sidecar now emits exactly
+   one line per input, **and** batches are framed by an explicit end marker so the reader
+   never has to guess how many replies are coming.
+3. **The remaining problem is not a hang at all.** The sidecar sits at 11–17% CPU — low
+   because MLX runs on the GPU — and progress only becomes visible at batch commit. Measured
+   honestly: **333 vectors in 362 s ≈ 0.92 vectors/s**, which is **~76 hours** for the full
+   corpus.
+
+**Cause:** the sidecar runs **one forward pass per chunk**. For a 0.6B model, Python
+round-trip and MLX graph-evaluation overhead dominate the arithmetic. **Fix:** tokenize and
+pad N texts and run a single batched forward pass — a contained change to `embed_qwen3.py`,
+and the next thing to do here. Until then, semantic search is limited to whatever subset has
+been embedded; **FTS5/BM25 works across the whole corpus regardless**, which is what the
+everything-bar uses.

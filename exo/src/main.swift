@@ -157,7 +157,8 @@ case "browser":
 case "imessage":
     let store = Store(dbPath)
     let (n, blob, excl, status) = IMessage.ingest(into: store,
-        limit: Int(opt("--limit", "20000")) ?? 20000, days: Int(opt("--days", "0")) ?? 0)
+        limit: Int(opt("--limit", "20000")) ?? 20000, days: Int(opt("--days", "0")) ?? 0,
+        rescan: flag("--rescan"))
     store.checkpoint()
     print("imessage: +\(n) ingested · \(blob) skipped (attributedBody typedstream) · \(excl) excluded · \(status)")
     if blob > 0 {
@@ -266,9 +267,13 @@ case "embed":
         // real semantic embeddings via the MLX sidecar
         let prov = Embed.qwenProvider
         let batch = Int(opt("--limit", "2000")) ?? 2000
+        guard let session = EmbedMLX.Session(bits: bits) else {
+            print("could not start the embedding sidecar"); break
+        }
+        defer { session.close() }
         var done = 0; let t0 = Date()
         while done < batch {
-            let todo = store.unvectorized(provider: prov, limit: min(64, batch - done))
+            let todo = store.unvectorized(provider: prov, limit: min(400, batch - done))
             if todo.isEmpty { break }
             // one vector per CHUNK, not per document
             var pieces: [(Int64, String)] = []
@@ -279,7 +284,7 @@ case "embed":
                     pieces.append((Int64(synth), c)); owner[synth] = (seq, ci); synth += 1
                 }
             }
-            let res = EmbedMLX.embed(pieces, bits: bits)
+            let res = session.embed(pieces)
             store.exec("BEGIN;")
             var covered = Set<Int64>()
             for r in res where r.vec.count == bits / 8 {
@@ -564,7 +569,8 @@ default:
       exo gmail [--query "newer_than:30d"] [--account x]
                                     ingest Gmail (restricted scope, personal-use exempt)
       exo browser [--days N]        Safari/Chrome/Brave/Edge history (needs FDA)
-      exo imessage [--days N]       iMessage chat.db (needs FDA)
+      exo imessage [--days N] [--rescan]
+                                    iMessage chat.db (needs FDA); --rescan re-reads all
       exo capture [--interval 2] [--once]
                                     AX-tree + clipboard capture loop
       exo search <query> [--hybrid] [--min-trust verified] [--limit N]
