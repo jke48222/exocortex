@@ -94,13 +94,15 @@ enum IPhone {
 
     /// Run the sidecar, feeding the password on stdin. Returns (stdoutLines, stderrText).
     static func run(mode: String, udid: String, password: String,
-                    sources: String = "", limit: Int = 20000) -> ([String], String) {
+                    sources: String = "", limit: Int = 20000,
+                    grep: String = "") -> ([String], String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         guard let script = scriptPath() else { return ([], Paths.missing("iphone.py")) }
         var args = ["python3", script, mode, "--udid", udid,
                     "--path", backupRoot, "--limit", String(limit)]
         if !sources.isEmpty { args += ["--sources", sources] }
+        if !grep.isEmpty { args += ["--grep", grep] }
         p.arguments = args
         let inP = Pipe(), outP = Pipe(), errP = Pipe()
         p.standardInput = inP; p.standardOutput = outP; p.standardError = errP
@@ -115,9 +117,14 @@ enum IPhone {
     }
 
     static func ingest(into store: Store, udid: String, password: String,
-                       sources: String, limit: Int) -> (Int, Int, String) {
+                       sources: String, limit: Int, verbose: Bool = false) -> (Int, Int, String) {
         let (lines, err) = run(mode: "extract", udid: udid, password: password,
                                sources: sources, limit: limit)
+        // The sidecar reports per-source counts and decrypt failures on stderr. Swallowing
+        // it made five of eight sources fail silently and look like empty data.
+        if verbose, !err.isEmpty {
+            FileHandle.standardError.write(("--- sidecar ---\n" + err + "\n").data(using: .utf8)!)
+        }
         var n = 0, skip = 0
         store.exec("BEGIN;")
         for line in lines {
@@ -135,12 +142,16 @@ enum IPhone {
                 store.recordExclusion(rule: "iphone:secret-shaped", bundle: "", app: "iPhone")
                 skip += 1; continue
             }
-            // Trust by capture path. Notes and calls I made are mine; a WhatsApp message
-            // someone else sent, or a call they placed, is third-party data on the shorter
-            // correspondence class.
-            let mine = (o["meta"] as? [String: Any]).flatMap { $0["from_me"] as? Bool } ?? (kind == "note")
+            // Trust by capture path, as everywhere else. The sidecar decides `mine` from
+            // the source's own semantics (ZISFROMME, ZORIGINATED, …) rather than exo
+            // guessing from a meta key that only some sources set.
+            let mine = (o["mine"] as? Bool) ?? false
+            let sensitive = (o["sensitive"] as? Bool) ?? false
             var e = Event(source: "iphone.\(kind)", sourceKind: mine ? .typed : .messageOther)
-            e.retention = mine ? "text" : "correspondence"
+            // Health is medical data. It goes on the T3 `sensitive` class (30 days) rather
+            // than being kept forever alongside ordinary notes — PASS-4 Area L tiers
+            // health, finance and legal separately for exactly this reason.
+            e.retention = sensitive ? "sensitive" : (mine ? "text" : "correspondence")
             e.app = "iPhone"; e.bundle = "com.apple.MobileBackup"
             e.title = (o["title"] as? String) ?? kind
             e.role = mine ? "me" : "them"
