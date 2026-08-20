@@ -696,6 +696,87 @@ case "forget-secrets":
     store.checkpoint()
     print("removed \(doomed.count) event(s) containing credentials · FTS index rebuilt")
 
+case "extract":
+    if #available(macOS 26.0, *) {
+        let s = Store(dbPath)
+        let lim = Int(opt("--limit", "50")) ?? 50
+        let verbose = flag("--verbose")
+        print("extracting claims from up to \(lim) trust=self events (on-device model)…")
+        let t0 = Date()
+        let r = await Extract.run(s, limit: lim, verbose: verbose,
+                                  order: flag("--random") ? "RANDOM()" : "e.seq DESC")
+        s.checkpoint()
+        let dt = Date().timeIntervalSince(t0)
+        print("""
+          scanned \(r.scanned) · \(r.claims) kept · \(r.dropped) dropped (volatile/not-mine) · \(r.empty) with none · \(r.failed) failed
+          \(String(format: "%.1f", dt))s (\(String(format: "%.1f", dt / Double(max(r.scanned,1))))s/event)
+        """)
+    } else { print("needs macOS 26+") }
+
+case "beliefs":
+    let s = Store(dbPath); Ledger.migrate(s)
+    let subj = positional().joined(separator: " ")
+    guard !subj.isEmpty else { print("usage: exo beliefs <subject> [--as-of ISO8601]"); break }
+    let asOf = opt("--as-of", Ledger.now())
+    let bs = Ledger.beliefsAt(s, subject: subj, asOf: asOf)
+    if bs.isEmpty { print("no beliefs about '\(subj)' as of \(asOf.prefix(10))"); break }
+    print("beliefs about '\(subj)' as of \(asOf.prefix(10)):\n")
+    for b in bs {
+        print("  \(b.polarity > 0 ? "✓" : "✗") \(b.text)")
+        print("    held \(b.beliefFrom.prefix(10))..\(b.beliefTo?.prefix(10) ?? "now") · conf \(String(format: "%.2f", b.confidence)) (\(b.confSrc)) · \(b.evidence) evidence · \(b.reason)")
+    }
+
+case "belief-history":
+    let s = Store(dbPath); Ledger.migrate(s)
+    let subj = positional().joined(separator: " ")
+    for b in Ledger.history(s, subject: subj) {
+        print("  \(b.beliefFrom.prefix(10))..\(b.beliefTo?.prefix(10) ?? "now")  \(b.polarity > 0 ? "✓" : "✗") \(b.text)")
+    }
+
+case "beliefs-review":
+    // Area E is explicit that relation extraction lands around 60-75 F1 and that human
+    // correction is a COMPONENT, not a fallback. Claims arrive unconfirmed
+    // (confidence_src = model_selfreport) and only become confirmed beliefs here.
+    let s = Store(dbPath); Ledger.migrate(s)
+    let pending = s.rows("""
+        SELECT b.belief_id, c.norm_text, c.subject, c.predicate, c.polarity, b.belief_from,
+               (SELECT count(*) FROM belief_evidence e WHERE e.belief_id=b.belief_id)
+        FROM belief b JOIN claim c ON c.claim_id=b.claim_id
+        WHERE b.sys_to IS NULL AND b.confidence_src='model_selfreport'
+        ORDER BY b.belief_from DESC LIMIT \(Int(opt("--limit","20")) ?? 20);
+        """)
+    if pending.isEmpty { print("nothing pending review"); break }
+    print("\(pending.count) unconfirmed claim(s). These are NOT yet beliefs.\n")
+    for p in pending {
+        print("  \(p[4] == "1" ? "✓" : "✗") \(p[1])")
+        print("      \(p[2]) · \(p[3]) · held from \(p[5].prefix(10)) · \(p[6]) evidence · id=\(p[0])")
+    }
+    print("""
+
+      exo beliefs-confirm <id>     promote to a confirmed belief
+      exo beliefs-reject <id>      remove it
+      exo beliefs-reject --all-pending
+    """)
+
+case "beliefs-confirm":
+    let s = Store(dbPath)
+    guard let id = positional().first else { print("usage: exo beliefs-confirm <belief_id>"); break }
+    s.exec("UPDATE belief SET confidence_src='human_confirmed', confidence=1.0 WHERE belief_id='\(id)';")
+    print("confirmed \(id)")
+
+case "beliefs-reject":
+    let s = Store(dbPath)
+    if flag("--all-pending") {
+        let n = s.scalar("SELECT count(*) FROM belief WHERE confidence_src='model_selfreport';")
+        s.exec("DELETE FROM belief_evidence WHERE belief_id IN (SELECT belief_id FROM belief WHERE confidence_src='model_selfreport');")
+        s.exec("DELETE FROM belief WHERE confidence_src='model_selfreport';")
+        print("rejected \(n) unconfirmed claim(s)")
+    } else if let id = positional().first {
+        s.exec("DELETE FROM belief_evidence WHERE belief_id='\(id)';")
+        s.exec("DELETE FROM belief WHERE belief_id='\(id)';")
+        print("rejected \(id)")
+    } else { print("usage: exo beliefs-reject <id> | --all-pending") }
+
 case "ledger-test":
     // The distinction the whole ledger exists to preserve, proven rather than asserted.
     let s = Store(dbPath); Ledger.migrate(s)
@@ -826,6 +907,11 @@ default:
       exo offsite-restore [path]    restore the newest offsite snapshot
       exo scan-secrets              audit the store for key-shaped content
       exo forget-secrets            delete anything scan-secrets finds
+      exo extract [--limit N]       extract claims into the belief ledger
+      exo beliefs <subject> [--as-of D]
+      exo beliefs-review            unconfirmed claims awaiting a human
+      exo beliefs-confirm <id> / beliefs-reject <id>
+      exo belief-history <subject>
       exo ledger-test               prove the mind-change / re-extraction split
       exo stats                     counts, trust mix, exclusions, policy
       exo seed                      synthetic events, no permissions needed

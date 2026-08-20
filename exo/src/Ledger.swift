@@ -198,8 +198,13 @@ enum Ledger {
 
     /// "What did I believe about X on date D?"  — the query the project exists for.
     static func beliefsAt(_ s: Store, subject: String, asOf: String,
-                          includeSuperseded: Bool = false) -> [Belief] {
-        let sysClause = includeSuperseded ? "" : "AND b.sys_to IS NULL"
+                          includeSuperseded: Bool = false,
+                          includeUnconfirmed: Bool = false) -> [Belief] {
+        let sysClause = (includeSuperseded ? "" : "AND b.sys_to IS NULL")
+            // An unreviewed model guess is not a belief. Extraction runs at roughly
+            // 60-75 F1, so surfacing raw output as "what you believe" would make the
+            // ledger confidently wrong about a third of the time.
+            + (includeUnconfirmed ? "" : " AND b.confidence_src <> 'model_selfreport'")
         let sql = """
         SELECT b.belief_id, c.norm_text, c.polarity, b.belief_from,
                coalesce(b.belief_to,''), b.confidence, b.confidence_src, b.change_reason,
