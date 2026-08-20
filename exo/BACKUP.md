@@ -64,15 +64,27 @@ The data is now offsite. **The decryption key is not.** It lives in this Mac's l
 Keychain, so a disk failure or theft loses the key and every iCloud snapshot becomes
 unreadable ciphertext.
 
-**Export it and put it somewhere that is not this machine:**
+**Export it to a password manager:**
 
 ```bash
-security find-generic-password -s exocortex.offsite -a age_identity -w | xxd -r -p
+exo offsite-key          # copies to the clipboard — never prints it
+# paste into your password manager, then:
+exo offsite-key-clear
 ```
 
-Paste that into a password manager, or print it. It is ~200 bytes. PASS-4 Area K.4's
-50-year scheme is Shamir 3-of-5 on metal; a copy in 1Password is a reasonable start and
-closes the actual risk today.
+It is **never printed**, so it cannot end up in scrollback, a shell history file, or a
+terminal recording. The clipboard entry is marked `org.nspasteboard.ConcealedType`, and
+exo's own clipboard capture redacts age keys — verified, not assumed.
+
+**Do not keep it in Apple Notes.** Notes is an ingested source *and* it syncs to iCloud,
+which is where the encrypted snapshots live. Storing it there means (a) the next Notes
+ingest pulls your key into the database that gets shipped offsite, and (b) anyone who
+compromises the Apple ID holds both the ciphertext and its key — which is exactly the
+property client-side encryption existed to provide. A password manager on a different
+account restores it.
+
+PASS-4 Area K.4's 50-year scheme is Shamir 3-of-5 on metal; a password-manager copy closes
+the real risk today.
 
 For a second offsite provider (different failure domain from iCloud):
 

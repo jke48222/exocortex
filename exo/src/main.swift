@@ -35,6 +35,14 @@ func fmt(_ n: Int) -> String {
     let f = NumberFormatter(); f.numberStyle = .decimal
     return f.string(from: NSNumber(value: n)) ?? "\(n)"
 }
+func shell(_ path: String, _ args: [String]) -> String {
+    let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args
+    let o = Pipe(); p.standardOutput = o; p.standardError = FileHandle.nullDevice
+    do { try p.run() } catch { return "" }
+    let d = o.fileHandleForReading.readDataToEndOfFile(); p.waitUntilExit()
+    return String(decoding: d, as: UTF8.self)
+}
+
 func stamp(_ micros: Int64) -> String {
     let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"; f.timeZone = .current
     return f.string(from: Date(timeIntervalSince1970: Double(micros) / 1_000_000))
@@ -592,6 +600,45 @@ case "hold":
     Retention.setHold(store, on, reason: opt("--reason", "manual"))
     print("litigation hold \(on ? "ENABLED — retention expiry suspended" : "released")")
 
+case "offsite-key":
+    // Copies the offsite private key to the clipboard WITHOUT printing it, so it never
+    // lands in scrollback, a log, or a terminal recording. exo's own clipboard capture
+    // redacts age keys (verified), so copying it does not feed it back into the store.
+    let raw = shell("/usr/bin/security",
+                    ["find-generic-password", "-s", "exocortex.offsite", "-a", "age_identity", "-w"])
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !raw.isEmpty else { print("no offsite key found in the Keychain"); break }
+    // `security` returns hex when the stored secret contains newlines
+    let isHex = raw.allSatisfy { $0.isHexDigit } && raw.count % 2 == 0
+    var key = raw
+    if isHex {
+        var bytes = [UInt8](); var i = raw.startIndex
+        while i < raw.endIndex, let j = raw.index(i, offsetBy: 2, limitedBy: raw.endIndex) {
+            bytes.append(UInt8(raw[i..<j], radix: 16) ?? 0); i = j
+        }
+        key = String(decoding: bytes, as: UTF8.self)
+    }
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    // Mark it concealed so any well-behaved clipboard manager (and exo itself) skips it
+    pb.declareTypes([NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType"), .string], owner: nil)
+    pb.setString(key, forType: .string)
+    print("""
+    Offsite private key copied to the clipboard. It was NOT printed.
+
+      1. Paste it into your password manager now (name it "exocortex offsite key")
+      2. Then clear the clipboard:   exo offsite-key --clear
+      3. Delete the copy in Notes
+
+    The Keychain keeps the working copy; the password manager is the off-machine
+    backup. Without it, every iCloud snapshot is unreadable ciphertext.
+    """)
+
+case "offsite-key-clear":
+    NSPasteboard.general.clearContents()
+    NSPasteboard.general.setString("", forType: .string)
+    print("clipboard cleared")
+
 case "offsite":
     let script = Paths.tool("offsite.sh") ?? ""
     if script.isEmpty { print(Paths.missing("offsite.sh")); break }
@@ -718,6 +765,8 @@ default:
        measured WORSE than binary-only — see RESULTS.md)
       exo retention [--apply]       run scheduled expiry (dry-run by default)
       exo hold on|off [--reason ..] litigation hold: suspend ALL expiry
+      exo offsite-key               copy the offsite key to the clipboard (never printed)
+      exo offsite-key-clear         clear the clipboard afterwards
       exo offsite                   encrypted snapshot -> iCloud Drive
       exo offsite-restore [path]    restore the newest offsite snapshot
       exo scan-secrets              audit the store for key-shaped content
