@@ -28,6 +28,12 @@ bash build/build.sh          # -> build/exo
 ./build/exo stats
 ```
 
+## Backup
+
+`bash tools/backup.sh` — `VACUUM INTO` snapshot into a restic repo, verified restorable
+(91,384 events, `integrity_check` ok, FTS working post-restore). **Currently local-only, which
+is not yet a real backup** — see [BACKUP.md](BACKUP.md) for the offsite step.
+
 ## The everything-bar
 
 `exo bar` puts a non-activating floating panel on **⌃⌥Space** (`--hotkey` to rebind). Phase 0's premise was *run it two
