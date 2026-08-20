@@ -608,6 +608,47 @@ case "offsite-restore":
     p.arguments = [script] + positional()
     try? p.run(); p.waitUntilExit()
 
+case "scan-secrets":
+    // Retroactive audit using the SAME precise matcher as ingest, so the scan cannot flag
+    // anything redaction wouldn't have caught.
+    let store = Store(dbPath)
+    var hits: [(Int64, String, String, String)] = []
+    for r in store.rows("SELECT seq, source, coalesce(text,'') FROM events WHERE length(coalesce(text,''))>20;") {
+        let found = Exclusion.findSecrets(r[2])
+        if !found.isEmpty {
+            hits.append((Int64(r[0]) ?? 0, r[1], found.joined(separator: ","), String(r[2].prefix(60))))
+        }
+    }
+    print("scanned \(store.count()) events with \(Exclusion.secretRegexes.count) credential patterns\n")
+    if hits.isEmpty {
+        print("  ✅ no credentials found")
+    } else {
+        for h in hits.prefix(40) {
+            print("  ⚠️  seq=\(h.0) [\(h.1)] \(h.2)")
+            print("      \(h.3.replacingOccurrences(of: "\n", with: " "))")
+        }
+        print("\n  \(hits.count) event(s). Remove with: exo forget-secrets --apply")
+    }
+
+case "forget-secrets":
+    let store = Store(dbPath)
+    var doomed: [Int64] = []
+    for r in store.rows("SELECT seq, coalesce(text,'') FROM events WHERE length(coalesce(text,''))>20;")
+    where !Exclusion.findSecrets(r[1]).isEmpty {
+        doomed.append(Int64(r[0]) ?? 0)
+    }
+    if doomed.isEmpty { print("nothing to remove"); break }
+    guard flag("--apply") else {
+        print("would remove \(doomed.count) event(s). Re-run with --apply to delete.")
+        break
+    }
+    store.exec("BEGIN;")
+    store.exec("DELETE FROM events WHERE seq IN (\(doomed.map(String.init).joined(separator: ",")));")
+    store.exec("COMMIT;")
+    store.exec("INSERT INTO events_fts(events_fts) VALUES('rebuild');")
+    store.checkpoint()
+    print("removed \(doomed.count) event(s) containing credentials · FTS index rebuilt")
+
 case "stats":
     let store = Store(dbPath)
     func pad(_ s: String, _ n: Int) -> String { s.padding(toLength: n, withPad: " ", startingAt: 0) }
@@ -679,6 +720,8 @@ default:
       exo hold on|off [--reason ..] litigation hold: suspend ALL expiry
       exo offsite                   encrypted snapshot -> iCloud Drive
       exo offsite-restore [path]    restore the newest offsite snapshot
+      exo scan-secrets              audit the store for key-shaped content
+      exo forget-secrets            delete anything scan-secrets finds
       exo stats                     counts, trust mix, exclusions, policy
       exo seed                      synthetic events, no permissions needed
 
