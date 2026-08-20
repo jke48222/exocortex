@@ -90,13 +90,7 @@ enum Chunker {
 enum EmbedMLX {
     struct Result { let id: Int64; let vec: [UInt8]; let i8: [Int8] }
 
-    static func scriptPath() -> String {
-        let exe = URL(fileURLWithPath: CommandLine.arguments[0])
-            .resolvingSymlinksInPath().deletingLastPathComponent()
-        // build/ -> exo/ -> tools/
-        return exe.deletingLastPathComponent()
-            .appendingPathComponent("tools/embed_qwen3.py").path
-    }
+    static func scriptPath() -> String { Paths.tool("embed_qwen3.py") ?? "" }
 
     /// A LONG-LIVED sidecar process.
     ///
@@ -112,8 +106,10 @@ enum EmbedMLX {
         private(set) var ok = false
 
         init?(bits: Int) {
-            let script = EmbedMLX.scriptPath()
-            guard FileManager.default.fileExists(atPath: script) else { return nil }
+            guard let script = Paths.tool("embed_qwen3.py") else {
+                FileHandle.standardError.write((Paths.missing("embed_qwen3.py") + "\n").data(using: .utf8)!)
+                return nil
+            }
             p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
             p.arguments = ["python3", "-u", script, "--bits", String(bits)]  // -u: unbuffered
             p.standardInput = inPipe; p.standardOutput = outPipe
