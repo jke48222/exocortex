@@ -181,15 +181,25 @@ def handle_call(id_, params):
             return tool_error(id_, "not_found", f"no such id {args.get('id')!r}")
         return tool_ok(id_, r)
 
-    # Backed by the bitemporal belief ledger, which is Phase 3 and does not exist yet.
-    # Returning an empty list with an explicit note beats inventing plausible beliefs —
-    # a memory system that fabricates is worse than one that admits a gap.
-    if name in ("memory.beliefs_at", "memory.commitments"):
-        key = "beliefs" if name.endswith("beliefs_at") else "commitments"
+    if name == "memory.beliefs_at":
+        b = ST.beliefs_at(args.get("subject", ""), args.get("as_of", now()),
+                          bool(args.get("include_superseded", False)))
+        if b is None:
+            ST.audit(p, name, args, 0, 0)
+            return tool_ok(id_, {"beliefs": [], "_unavailable":
+                                 "belief ledger tables not present; run `exo ledger-test` "
+                                 "or an extraction pass to create them"})
+        ST.audit(p, name, args, len(b), 0)
+        return tool_ok(id_, {"beliefs": b})
+
+    # Commitments need the Ledger daemon, which is not built. Returning an empty list and
+    # saying so beats inventing plausible obligations: a commitment tracker that surfaces
+    # three phantom obligations gets switched off within a week.
+    if name == "memory.commitments":
         ST.audit(p, name, args, 0, 0)
-        return tool_ok(id_, {key: [], "_unavailable":
-                             "the bitemporal belief ledger is not built yet (Phase 3); "
-                             "this returns empty rather than fabricating"})
+        return tool_ok(id_, {"commitments": [], "_unavailable":
+                             "the Ledger daemon is not built yet; this returns empty "
+                             "rather than fabricating obligations"})
 
     if name == "memory.correct":
         return tool_error(id_, "needs_approval",
