@@ -61,7 +61,9 @@ QUERIES = [
 ]
 
 def embed(texts, bits):
+    # the sidecar batches, so a partial batch only flushes on the end marker
     inp = "\n".join(json.dumps({"id": i, "text": t}) for i, t in enumerate(texts))
+    inp += "\n" + json.dumps({"cmd": "end"})
     out = subprocess.run(["python3", "tools/embed_qwen3.py", "--bits", str(bits)],
                          input=inp, capture_output=True, text=True).stdout
     B, I = {}, {}
