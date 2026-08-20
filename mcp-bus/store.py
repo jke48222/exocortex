@@ -136,6 +136,56 @@ def provenance(event_id):
             "derived_from": [], "derived_to": []}
 
 
+def beliefs_at(subject, as_of, include_superseded=False):
+    """Point-in-time belief query over the bitemporal ledger.
+
+    `sys_to IS NULL` selects the system's CURRENT record; the belief interval predicate
+    selects what was held at `as_of`. Both are needed: the first answers "what does the
+    system now say", the second "what did I believe then"."""
+    sysc = "" if include_superseded else "AND b.sys_to IS NULL"
+    sql = f"""
+      SELECT c.norm_text, c.polarity, b.belief_from, b.belief_to, b.valid_from, b.valid_to,
+             b.sys_from, b.confidence, b.confidence_src, b.change_reason, b.supersedes,
+             (SELECT count(*) FROM belief_evidence e WHERE e.belief_id=b.belief_id)
+      FROM belief b JOIN claim c ON c.claim_id=b.claim_id
+      WHERE lower(c.subject) LIKE lower(?) {sysc}
+        AND b.belief_from <= ? AND (b.belief_to IS NULL OR b.belief_to > ?)
+      ORDER BY b.belief_from DESC LIMIT 50
+    """
+    out = []
+    with connect() as c:
+        try:
+            rows = c.execute(sql, (f"%{subject}%", as_of, as_of)).fetchall()
+        except sqlite3.OperationalError:
+            return None                      # ledger tables not created yet
+        for r in rows:
+            text, pol, bf, bt, vf, vt, sf, conf, csrc, reason, sup, ev = r
+            body, _ = sanitize(text)
+            out.append({"text": body, "polarity": pol,
+                        "belief_from": bf, "belief_to": bt,
+                        "valid_from": vf, "valid_to": vt, "learned_at": sf,
+                        "confidence": conf, "confidence_src": csrc,
+                        "change_reason": reason, "superseded_by": sup,
+                        "evidence_count": ev, "trust": "self"})
+    return out
+
+
+def belief_history(subject):
+    sql = """
+      SELECT c.norm_text, c.polarity, b.belief_from, b.belief_to, b.change_reason, b.confidence
+      FROM belief b JOIN claim c ON c.claim_id=b.claim_id
+      WHERE lower(c.subject) LIKE lower(?) AND b.sys_to IS NULL
+      ORDER BY b.belief_from LIMIT 100
+    """
+    with connect() as c:
+        try:
+            rows = c.execute(sql, (f"%{subject}%",)).fetchall()
+        except sqlite3.OperationalError:
+            return None
+    return [{"text": sanitize(r[0])[0], "polarity": r[1], "belief_from": r[2],
+             "belief_to": r[3], "change_reason": r[4], "confidence": r[5]} for r in rows]
+
+
 def stats():
     with connect() as c:
         n = c.execute("SELECT count(*) FROM events").fetchone()[0]
