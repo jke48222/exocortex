@@ -1,9 +1,9 @@
 # exo — Exocortex capture fleet + retrieval + belief ledger + dream cycle
 
-**Phases 1–9.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
+**Phases 1–10.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
 bitemporal belief ledger → contradiction detection → connection discovery → episode segmentation
-and recall → engineered forgetting → commitment tracking, with the retention policy and
-capture-exclusion list shipped *now* rather than later.
+and recall → engineered forgetting → commitment tracking → the weekly story, with the retention
+policy and capture-exclusion list shipped *now* rather than later.
 
 **Measured results, including one that contradicts the research: [RESULTS.md](RESULTS.md).**
 
@@ -37,6 +37,7 @@ bash build/build.sh          # -> build/exo
 ./build/exo connect --histogram             # calibrate the band before trusting it
 ./build/exo segment                         # cut the day into episodes, then summarize
 ./build/exo day                             # yesterday, as episodes with citations
+./build/exo historian                       # the Historian: the week, when it has a story
 ./build/exo butler <handle>                 # the Butler daemon: the dossier on one person
 ./build/exo commitments --scan              # the Ledger daemon: what you owe, and are owed
 ./build/exo commitments --eval              # precision/recall on the labelled set
@@ -52,6 +53,7 @@ bash build/build.sh          # -> build/exo
 ./build/exo decay-test                      # 15/15 the curve, immunity, and never deleting
 ./build/exo promise-test                    # 11/11 commissive gate, dedup, discharge, cascade
 ./build/exo butler-test                     # 5/5   ordering, the 5-bullet cap, tapback filter
+./build/exo historian-test                  # 11/11 week math, citation gates, replace, cascade
 ```
 
 ## Backup
@@ -159,6 +161,23 @@ the model confabulated it 38 times out of 40, naming something that occurs in on
 the other, and a schema-level escape hatch went unused 39 times out of 39. Intersecting the two
 notes and keeping rare terms makes the link grounded *by construction*. Full numbers in
 [RESULTS.md §7](RESULTS.md).
+
+## Historian — the week as a story, when it has one
+
+`exo historian` writes the weekly note from the **episode layer**, not the raw week — that is
+hierarchical map-reduce reaching its top level, and it converts the task from the kind this model
+fails (judgement over long context) into the kind it passes (description over short evidence).
+A real week still overflows the on-device window — 67 episodes, one build day alone cut into 40 —
+so the model is shown a **selection, stated out loud**: largest per day, at most 3/day, capped at
+10, chronological.
+
+**The model does not decide whether the week has a story.** Two gates in code: fewer than 2
+summarized episodes and it is never asked; fewer than 2 beats surviving citation-verification and
+the week is recorded story-less, whatever the headline claimed. Beats cite episodes, episodes cite
+events, and deletion cascades the whole chain. Runs Sundays inside `exo dream` (`--historian` to
+force); the current headline surfaces in `exo brief`. Where Area F says Opus-tier, this runs the
+on-device 3B and says so — the corpus never leaves the machine, so the harness is the durable part
+and the model is the swappable one. Full numbers in [RESULTS.md §12](RESULTS.md).
 
 ## Butler — the dossier, and the trigger this corpus cannot provide
 
@@ -280,8 +299,8 @@ in Phase 1 and not Phase 6.
 ## Next
 
 **Area F's DAG is built** — S1 segment, S2 summarize, S4 contradict, S5 connect, S6 decay, S8
-brief — plus the **Ledger** and **Butler** daemons. Three remain: **Scout** (nightly, question rot
-at 60d — needs a source of open questions and a frontier model, neither local), **Historian**
-(Sunday, *"some weeks have no story; say so"*), **Editor** (on request only, never autonomous).
+brief — plus the **Ledger**, **Butler** and **Historian** daemons. Two remain: **Scout** (nightly,
+question rot at 60d — needs a source of open questions), **Editor** (on request only, never
+autonomous — and the least suited to a local 3B, per Area F: *"voice collapse and fact drift"*).
 Also outstanding: EM-LLM's graph-theoretic refinement of S1's boundaries, and the `ABMultiValue`
-ingest gap that would give Butler its name↔handle join.
+ingest gap that would give Butler its name↔handle join — the backup is still on disk.

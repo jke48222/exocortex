@@ -813,3 +813,79 @@ check exists for *"She said - I'll see what I can learn on my end!!!"*, and both
 question — **whose words are these, as distinct from who transmitted them?** A life-log that
 answers that question wrong will keep answering it wrong in new places, and each place needs its
 own guard.
+
+---
+
+## 12. Historian — the model narrates, code decides whether there is a story
+
+Area F: *Sunday · Opus-tier, narrative quality is the product · failure mode is
+narrativization — instruct "some weeks have no story; say so."* Two of those clauses are
+implemented differently on purpose, and both reasons are measurements from earlier sections.
+
+### 12.1 The input is the episode layer, not the raw week
+
+§6–§8 drew the line through this model's abilities precisely: **judgement over long context
+fails** (14/14 wrong verdicts, 38/40 confabulated links), **description over short evidence
+works** (0 bad quotes in §10, clean cited lines in §8). A raw week is 1,000+ events of long
+context; a week of episodes is a couple dozen short, already-cited lines. Feeding the Historian
+S2's output instead of S0's is hierarchical map-reduce reaching its top level — and it converts
+the task from the failing kind into the passing kind.
+
+Even the episode layer overflows, though: the first live week held **67 summarized episodes**
+(one heavy build day alone cut into 40), and 67 × 5 lines is past the window §7 already hit
+("Exceeded model context window size") with less. The answer is **selection in code, stated out
+loud**: largest episodes first (event count is the one importance signal S1 produces without a
+model), at most 3 per day so one enormous day cannot crowd out the other six, capped at 10,
+restored to chronological order. The read-out prints *"67 episodes, 10 offered to the model"* so
+a selection is never mistaken for the whole week.
+
+### 12.2 Two no-story gates, both in code
+
+The instruction *"some weeks have no story; say so"* is in the prompt because Area F names it
+verbatim — but §7 measured what a schema-level escape hatch is worth with this model (offered a
+boolean it could set false, it did so **0 times in 39**), so nothing downstream trusts the
+model's own account:
+
+1. **Structural** — fewer than 2 summarized episodes and the model is never asked. One episode
+   is a day's work, not an arc.
+2. **Evidential** — every beat must cite an episode that is actually in the offered set,
+   normalized-matched and verified in code, and a reply with fewer than 2 surviving beats is
+   recorded as story-less regardless of how confident its headline sounds.
+
+Beats cite episodes; episodes cite events; **deletion cascades the whole chain** — the same
+provenance rule as §8, one level up.
+
+### 12.3 The live week
+
+67 episodes across 4 segmented days → 10 offered → **6 proposed, 5 verified, 1 dropped** for
+citing outside the offered set. 7.1 s end to end. Output, unedited:
+
+```
+  A week of rebuilding, testing, and new beginnings
+
+    · Washi texture was removed and all artwork was rebuilt at higher quality
+    · The hero text/classes were designed for ink over a bright first frame — now it's dark navy
+    · The home renders correctly on the full new stack — nav bar geometry, type scale, gold CTA…
+    · The portal is live and healthy in production…
+    · I want to start a new project that is just fun. Embedded is a great direction for this.
+```
+
+Commitments, connections, contradictions and beliefs are appended as code-built sidebars — the
+model narrativizes episodes only; the rest of the derived layer is already structured and is
+printed as it is.
+
+One wart worth keeping: the first run's beats included one ending mid-word — *"…drifting against
+a pre-populated va"* — because the **prompt** truncated episode lines at 120 chars and the model
+copied the truncation faithfully. That is §10's finding from the other side: this model's
+"description" is near-verbatim copying, which is exactly why citation-checking works on it, and
+why what you show it is what you get back. Selection had bought room, so lines are now shown
+whole.
+
+### 12.4 Where Area F says Opus-tier, this runs the on-device 3B
+
+That gap is stated rather than hidden. The corpus's one non-negotiable property (Extract.swift)
+is that **the text never leaves the machine**; shipping a week of episodes to a cloud model would
+quietly break it. What the 3B produces is a competent, citation-verified *digest* — not the
+narrative quality Area F says is the product. So the durable part of this daemon is the harness:
+assembly, selection, verification, the no-story default, the Sunday trigger in `exo dream`, the
+cascade. The model is the swappable part; a frontier-quality local model changes one function.
