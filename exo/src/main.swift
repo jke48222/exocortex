@@ -934,6 +934,116 @@ case "ledger-test":
 
     print("\n  \(pass) passed, \(fail) failed")
 
+case "historian":
+    if #available(macOS 26.0, *) {
+        let s = Store(dbPath); Historian.migrate(s)
+        let today = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current
+                      return f.string(from: Date()) }()
+        let ending = opt("--ending", today)
+        let t0 = Date()
+        let r = await Historian.run(s, ending: ending, verbose: flag("--verbose"))
+        s.checkpoint()
+        if r.judgeFailed {
+            print("the Historian could not run — \(r.lastError)")
+            print("Nothing was written. This is NOT a quiet week; it is an unwritten one.")
+            break
+        }
+        print("\n  Week of \(r.start) — \(r.week)\n")
+        if r.skippedStructurally {
+            print("  \(r.episodes) summarized episode(s) — not enough to even ask for a story.")
+            print("  Run `exo segment --day <day>` for more of the week, then re-run.\n")
+        } else if !r.hasStory {
+            print("  A quiet week: \(r.episodes) episodes, and nothing that adds up to a story.")
+            print("  (Some weeks have no story. \(r.proposed) beat(s) proposed, \(r.uncited) cited outside the week.)\n")
+        } else {
+            print("  \(r.headline)\n")
+            for (t, epi) in r.beats { print("    · \(t)  [\(epi.suffix(8))]") }
+            print("\n  \(r.episodes) episodes, \(r.offered) offered to the model (largest per day) · \(r.beats.count) beats verified · \(r.uncited) dropped")
+        }
+        let side = Historian.sidebars(s, start: r.start, end: r.week)
+        if !side.isEmpty {
+            print("\n  Also this week")
+            for l in side { print("    · \(l)") }
+        }
+        print("  \(String(format: "%.1f", Date().timeIntervalSince(t0)))s")
+    } else { print("needs macOS 26+") }
+
+case "historian-test":
+    let s = Store(dbPath); Historian.migrate(s)
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  ✅ \(label)"); pass += 1 }
+        else { print("  ❌ \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+
+    // ── the week, in the person's own calendar ──
+    let w = Historian.weekEnding(containing: "2026-08-20")     // a Thursday
+    chk("a Thursday belongs to the week ending that Sunday",
+        "\(w?.start ?? "-")..\(w?.end ?? "-")", "2026-08-17..2026-08-23")
+    let sun = Historian.weekEnding(containing: "2026-08-23")
+    chk("a Sunday ends its own week", sun?.end ?? "-", "2026-08-23")
+    let mon = Historian.weekEnding(containing: "2020-01-06")
+    chk("a Monday starts one", "\(mon?.start ?? "-")..\(mon?.end ?? "-")", "2020-01-06..2020-01-12")
+
+    // ── verification: a beat must cite an episode that is in the week ──
+    let offered = ["epi_httesta", "epi_httestb"]
+    let ok = Historian.verified([("The build finally went green after two days", "[EPI_HTTESTA]"),
+                                 ("Something confidently invented", "epi_elsewhere"),
+                                 ("x", "epi_httestb")],
+                                offered: offered)
+    chk("a bracketed, wrong-case citation still resolves", String(ok.count), "1")
+    chk("…to the right episode", ok.first?.1 ?? "-", "epi_httesta")
+    print("     ^ the invented citation and the 1-char beat both died in code, not in prose")
+
+    // ── persistence, replace-not-append, and the cascade chain ──
+    func mkEpisode(_ id: String, _ day: String) {
+        s.exec("""
+            INSERT OR IGNORE INTO episode(episode_id,day,started_at,ended_at,n_events,sources,
+                                          title,summary,peak_surprise,created_at)
+            VALUES('\(id)','\(day)',0,0,3,'t','Fixture episode','',0,'\(Ledger.now())');
+            """)
+    }
+    func wipe() {
+        s.exec("DELETE FROM weekly_beat WHERE week='2020-01-12';")
+        s.exec("DELETE FROM weekly_note WHERE week='2020-01-12';")
+        s.exec("DELETE FROM episode WHERE episode_id IN ('epi_httesta','epi_httestb');")
+    }
+    wipe()
+    mkEpisode("epi_httesta", "2020-01-07"); mkEpisode("epi_httestb", "2020-01-09")
+    chk("both fixture episodes land in the week",
+        String(Historian.episodes(s, start: "2020-01-06", end: "2020-01-12").count), "2")
+
+    var rep = Historian.Report()
+    rep.week = "2020-01-12"; rep.start = "2020-01-06"; rep.episodes = 2
+    rep.hasStory = true; rep.headline = "A fixture week"
+    rep.beats = [("first thing", "epi_httesta"), ("second thing", "epi_httestb")]
+    Historian.persist(s, rep)
+    rep.beats = [("only thing now", "epi_httesta")]
+    Historian.persist(s, rep)
+    chk("re-running a week replaces its beats rather than appending",
+        String(s.scalar("SELECT count(*) FROM weekly_beat WHERE week='2020-01-12';")), "1")
+
+    s.exec("DELETE FROM episode WHERE episode_id='epi_httesta';")
+    chk("deleting a cited episode deletes the beat that cited it",
+        String(s.scalar("SELECT count(*) FROM weekly_beat WHERE week='2020-01-12';")), "0")
+    chk("…while the note survives",
+        String(s.scalar("SELECT count(*) FROM weekly_note WHERE week='2020-01-12';")), "1")
+    print("     ^ beats cite episodes, episodes cite events; deletion cascades the whole chain")
+
+    // ── the two no-story gates ──
+    var quiet = Historian.Report()
+    quiet.week = "2020-01-12"; quiet.start = "2020-01-06"
+    quiet.episodes = 1; quiet.skippedStructurally = true
+    Historian.persist(s, quiet)
+    let stored = Historian.note(s, week: "2020-01-12")
+    chk("a structurally quiet week persists as story-less",
+        stored.map { "\($0.hasStory)|\($0.headline)" } ?? "-", "false|")
+    chk("gate thresholds are what the docs claim",
+        "\(Historian.minEpisodes)|\(Historian.minBeats)", "2|2")
+
+    wipe(); s.checkpoint()
+    print("\n  \(pass) passed, \(fail) failed")
+
 case "butler":
     let s = Store(dbPath); Promise.migrate(s)
     let who = positional().joined(separator: " ")
@@ -1150,6 +1260,12 @@ case "brief":
     // Unresolved commitments lead, in both directions. Area F's Butler note is explicit
     // that a briefing opens with these rather than with a summary, because "you promised her
     // the doc three weeks ago and never sent it" is the thing a briefing exists to say.
+    Historian.migrate(s)
+    if let wk = s.rows("SELECT week, headline FROM weekly_note WHERE has_story=1 ORDER BY week DESC LIMIT 1;").first,
+       let end = wk.first, !end.isEmpty,
+       let latest = s.rows("SELECT max(day) FROM episode;").first?.first, latest <= end {
+        print("  The week so far: \(wk[1])   (exo historian)\n")
+    }
     if !owed.isEmpty || !owedToMe.isEmpty {
         print("  Still open")
         for c in owed { print("    you owe · \(c.action)\(c.due.isEmpty ? "" : " (\(c.due))") — \(c.ageDays)d ago") }
@@ -1239,6 +1355,20 @@ case "dream":
         else {
             print("    \(fmt(c5.scanned)) neighbour pairs · \(c5.candidates) candidates · \(c5.grounded) share a rare term · \(c5.kept) kept")
         }
+        // The Historian is Sunday's work — a weekly note re-written nightly would churn
+        // its own story. `--historian` forces it for testing.
+        if flag("--historian") || Historian.isSunday() {
+            print("Historian  weekly note")
+            let today = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current
+                          return f.string(from: Date()) }()
+            let hr = await Historian.run(s, ending: opt("--ending", today), verbose: false)
+            if hr.judgeFailed { print("    unavailable: \(hr.lastError)") }
+            else if hr.skippedStructurally { print("    \(hr.episodes) episode(s) — not enough to ask for a story") }
+            else { print("    \(hr.hasStory ? "\"\(hr.headline)\" · \(hr.beats.count) beats" : "a quiet week") · \(hr.uncited) uncited dropped") }
+        } else {
+            print("Historian  (Sundays; --historian to force)")
+        }
+
         print("S6  decay")
         let d6 = Decay.run(s, apply: true, floor: Decay.floor, limit: 500_000)
         print("    \(fmt(d6.considered)) considered · \(fmt(d6.immune)) immune · \(fmt(d6.demoted)) demoted · \(fmt(d6.revived)) revived")

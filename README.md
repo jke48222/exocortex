@@ -10,7 +10,7 @@ Research: [`portfolio-research/PASS-4-exocortex-crossportfolio-research.md`](../
 
 | Component | Status | Headline |
 |---|---|---|
-| **[`exo/`](exo/)** — Phases 1–9: capture → vectors → beliefs → contradictions → connections → episodes → decay → commitments → dossiers | ✅ built, **76/76 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, four-way contradiction detection, **Area F's nightly DAG complete** + the Ledger daemon at P=1.00/R=0.67 + Butler |
+| **[`exo/`](exo/)** — Phases 1–10: capture → vectors → beliefs → contradictions → connections → episodes → decay → commitments → dossiers → the weekly story | ✅ built, **87/87 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, **Area F's nightly DAG complete** + Ledger (P=1.00/R=0.67), Butler, and Historian daemons |
 | **[`mcp-bus/`](mcp-bus/)** — the memory contract | ✅ **v1.0.0 FROZEN** | 9 tools, 4 trust tiers; invariants proven by smoke tests |
 
 ## exo — Phase 1
@@ -53,8 +53,8 @@ harness built, cross-client run pending).
 
 ## Next
 
-**Phase 10 — the last daemons.** Area F's nightly DAG is complete, **Ledger** ships at
-**P = 1.00, R = 0.67**, and **Butler** ships as an on-demand dossier — its T−30 calendar trigger
-is blocked by the corpus, not the design: 0 of 1,334 calendar events carry attendees. Three to go:
-**Scout** (needs open questions and a frontier model, neither local), **Historian** (Sunday,
-*"some weeks have no story; say so"*), **Editor** (on request only, never autonomous).
+**Phase 11 — the last two daemons.** The DAG and three of five daemons ship: Ledger
+(P = 1.00/R = 0.67), Butler (on-demand dossier), Historian (Sunday, citation-verified beats, code
+decides whether the week has a story). Remaining: **Scout** (needs a source of open questions),
+**Editor** (on request only, never autonomous — the least suited to a local 3B). Plus EM-LLM's
+boundary refinement and the `ABMultiValue` contacts join, whose backup is still on disk.
