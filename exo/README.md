@@ -1,8 +1,8 @@
-# exo — Exocortex capture fleet + retrieval + belief ledger
+# exo — Exocortex capture fleet + retrieval + belief ledger + dream cycle
 
-**Phases 1–4.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
-bitemporal belief ledger → contradiction detection, with the retention policy and
-capture-exclusion list shipped *now* rather than later.
+**Phases 1–5.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
+bitemporal belief ledger → contradiction detection → connection discovery, with the retention
+policy and capture-exclusion list shipped *now* rather than later.
 
 **Measured results, including one that contradicts the research: [RESULTS.md](RESULTS.md).**
 
@@ -33,8 +33,12 @@ bash build/build.sh          # -> build/exo
 ./build/exo beliefs me --as-of 2025-06-01T00:00:00Z
 ./build/exo contradictions --scan           # detect; then review what needs a decision
 ./build/exo contra-resolve <id> genuine_change
+./build/exo connect --histogram             # calibrate the band before trusting it
+./build/exo dream                           # the nightly DAG: S4 + S5
+./build/exo brief                           # the morning read-out (at most 3)
 ./build/exo ledger-test                     # 7/7   bitemporal invariants
 ./build/exo contra-test                     # 15/15 detection + resolution invariants
+./build/exo connect-test                    # 13/13 eligibility, grounding, cascade
 ```
 
 ## Backup
@@ -99,6 +103,31 @@ Two things the measurements decided, both in [RESULTS.md §6](RESULTS.md):
   identical question twice — so the judgement is made in code instead. **P = 1.0, R = 0.5** on a
   small labelled set, which is the shape Area E asks for: *"false positives destroy it."*
 
+## Connection discovery — what similarity actually finds
+
+`exo dream` runs the nightly stages that exist; `exo brief` is the read-out, capped at **three**
+because *one false connection destroys trust in all of them*.
+
+```
+46,194 neighbour pairs  →  181 candidates  →  35 share a rare term  →  19 described  →  3 in the brief
+        0.7 s                Δt≥30d, hub,        grounded by
+                             automation          construction
+```
+
+**The first twelve findings were twelve pieces of infrastructure** — a Claude.ai sign-in email
+matched to the Claude.ai sign-in URL at 0.911, four marketing emails matched to
+`Base directory for this skill: /private/tmp/…`. None of Area F's filters touch that, because
+the candidates were not wrong: a login email and a login URL really are different sources, really
+142 days apart, really about one thing. **Similarity search over a life-log finds the corpus's
+hubs, and a life-log's hubs are its boilerplate.**
+
+So **88% of the vectorized corpus is ineligible** to be one end of a connection — `browser.*` is
+99.6% bare URLs, a third of the whole index. And **the link is computed rather than asked for**:
+the model confabulated it 38 times out of 40, naming something that occurs in one note and not
+the other, and a schema-level escape hatch went unused 39 times out of 39. Intersecting the two
+notes and keeping rare terms makes the link grounded *by construction*. Full numbers in
+[RESULTS.md §7](RESULTS.md).
+
 ## Retention — the FRCP 37(e) defense
 
 | Class | TTL | Why |
@@ -156,7 +185,7 @@ in Phase 1 and not Phase 6.
 
 ## Next
 
-The rest of the dream cycle (Area F): segmentation by prediction error, hierarchical map-reduce
-summarization, **S5 connection discovery** (two-stage ANN → LLM judging, at most 1–3 per morning),
-FSRS decay, and the morning brief. Then the daemons — Scout, Butler, Ledger, Historian, Editor.
-Contradiction detection is S4 of that DAG and is built; the DAG runner that schedules it is not.
+S4, S5 and S8 of Area F's DAG are built and `exo dream` runs them. Still missing: **S1**
+segmentation by prediction error, **S2** hierarchical map-reduce summarization, and **S6** FSRS
+decay (`R = exp(ln(0.9)·t/S)`, demote to cold storage, never hard-delete). Then the daemons —
+Scout, Butler, Ledger, Historian, Editor.
