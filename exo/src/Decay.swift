@@ -180,9 +180,8 @@ enum Decay {
     /// What must never decay, and why each one is on the list.
     ///
     /// Area F names three: **commitments until discharged, contradictions until resolved,
-    /// anything pinned.** Commitments are the Ledger daemon's output and do not exist yet,
-    /// so the clause is written and unreachable rather than silently dropped — when that
-    /// daemon lands, this is where it plugs in.
+    /// anything pinned.** All three are now reachable — the commitment clause was written
+    /// against a table that did not exist yet, and the Ledger daemon is what filled it.
     ///
     /// Evidence for a *confirmed* belief is added to the list. An unreviewed model guess is
     /// not a belief, so it is not protected; a belief the principal confirmed is the most
@@ -190,6 +189,9 @@ enum Decay {
     /// belief whose provenance you cannot see.
     static let immuneSQL = """
         SELECT seq FROM memory_state WHERE pinned = 1
+        UNION
+        -- A promise you have not kept is the last thing that should quietly go cold.
+        SELECT seq FROM commitment WHERE status = 'open'
         UNION
         SELECT e.seq FROM belief_evidence e
           JOIN belief b ON b.belief_id = e.belief_id

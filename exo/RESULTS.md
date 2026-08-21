@@ -678,3 +678,70 @@ everything else, which is exactly backwards.
 belief whose provenance you cannot see), and beliefs in an open contradiction. Area F also names
 *commitments until discharged*; that clause is written and currently unreachable, because the
 Ledger daemon that produces commitments does not exist yet.
+
+---
+
+## 10. The Ledger daemon — the first stage where the model was actually good
+
+Commitments, both directions, until discharged. This is the daemon with the most prior art —
+Enron speech-act detection (ACL W11-0711), MSR domain adaptation (WSDM 2019), SIGIR 2020 email
+intent, the Cortana/Outlook lineage at ~90% precision — and they all conclude the same thing,
+which Area F puts a number on: **tune to P ≈ 0.9 even at R = 0.5.**
+
+### 10.1 Measured on a hand-labelled set
+
+Twelve messages, authored or taken verbatim from this corpus and labelled **before** the
+detector was pointed at them. §2's retracted round is why: an eval whose ground truth comes from
+the thing being evaluated is not an eval.
+
+The negatives are the interesting half — every one contains a commitment-shaped phrase and none
+is a promise: a request (*"let me know if you'd like to reschedule"*), a denial of ability
+(*"I dont think i can make it tn"*), a relayed permission (*"My mom said i can take her car"*),
+and a hedge (*"i'll have to see if i can use my moms car"*).
+
+| | detected | not detected |
+|---|---:|---:|
+| **is a commitment** | 4 | 2 |
+| **is not** | **0** | 6 |
+
+**P = 1.00, R = 0.67** — past Area F's bar on both axes, and **zero false positives**, including
+on all six near-misses. Both misses are `let me`-initial. Measured on the *stored* decision, checks
+included, not on the model's raw flag: crediting the flag alone would flatter the detector with
+answers the checks would have thrown away.
+
+That is the best any stage in this project has done with this model, and the reason is worth
+naming: **detecting a commissive speech act in one short message is an easy task**, where judging
+whether two long notes contradict (§6) or share a subject (§7) is not. The model was never
+uniformly bad — it was bad at judgement over long context and fine at recognition over short.
+
+### 10.2 The three checks, and the message that motivated the third
+
+Every claim is verified in code before storage, and these are the same checks §6, §7 and §8
+each arrived at independently:
+
+1. **Verbatim** — the quoted promise must occur in the message. Notably **0 quotes were rejected
+   for this** in a 60-message run, against 38-of-40 confabulation in §7. Copying a span out of one
+   short message is a different task from finding a term shared by two long ones.
+2. **Commissive** — the quote must contain a first-person commissive marker. 2 of 7 detections
+   were rejected here.
+3. **Consistent** — the writer must also be the promiser. 1 of 7 rejected.
+
+Check 3 exists because of this message, which is real and is in the corpus:
+
+> *"She said - I'll see what I can learn on my end!!!"*
+
+It is `trust='self'`, it contains a textbook commissive, and **the person making the promise is
+not the writer.** That is the tapback bug in a new costume — the principal sent the bytes,
+somebody else owns the meaning. Trust is assigned by capture path and is never overridden by a
+model, so when the two disagree the row is dropped rather than guessed.
+
+### 10.3 On the real corpus
+
+60 candidates scanned → 7 proposed → **4 stored**, all four genuine, e.g. *"I'll keep your
+application on file and will reach out should our plans change"* (22 days old) and *"I will review
+it today"* (18 days old).
+
+This also makes Area F's third never-decay clause reachable: **an open commitment cannot go
+cold.** It was written in §9 against a table that did not exist yet, and immunity went from 1 row
+to 5 the moment the daemon ran. A promise you have not kept is the last thing that should quietly
+be demoted.

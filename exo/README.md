@@ -1,9 +1,9 @@
 # exo — Exocortex capture fleet + retrieval + belief ledger + dream cycle
 
-**Phases 1–7.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
+**Phases 1–8.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
 bitemporal belief ledger → contradiction detection → connection discovery → episode segmentation
-and recall → engineered forgetting, with the retention policy and capture-exclusion list shipped
-*now* rather than later.
+and recall → engineered forgetting → commitment tracking, with the retention policy and
+capture-exclusion list shipped *now* rather than later.
 
 **Measured results, including one that contradicts the research: [RESULTS.md](RESULTS.md).**
 
@@ -37,6 +37,9 @@ bash build/build.sh          # -> build/exo
 ./build/exo connect --histogram             # calibrate the band before trusting it
 ./build/exo segment                         # cut the day into episodes, then summarize
 ./build/exo day                             # yesterday, as episodes with citations
+./build/exo commitments --scan              # the Ledger daemon: what you owe, and are owed
+./build/exo commitments --eval              # precision/recall on the labelled set
+./build/exo commit-done <id>                # discharged
 ./build/exo decay                           # S6 dry run; --apply to demote
 ./build/exo pin <seq>                       # pinned rows never decay
 ./build/exo dream                           # the nightly DAG: S1 S2 S4 S5 S6
@@ -46,6 +49,7 @@ bash build/build.sh          # -> build/exo
 ./build/exo connect-test                    # 13/13 eligibility, grounding, cascade
 ./build/exo segment-test                    # 10/10 surprise, boundaries, citation cascade
 ./build/exo decay-test                      # 15/15 the curve, immunity, and never deleting
+./build/exo promise-test                    # 11/11 commissive gate, dedup, discharge, cascade
 ```
 
 ## Backup
@@ -154,6 +158,25 @@ the other, and a schema-level escape hatch went unused 39 times out of 39. Inter
 notes and keeping rare terms makes the link grounded *by construction*. Full numbers in
 [RESULTS.md §7](RESULTS.md).
 
+## Commitments — the Ledger daemon, and the first stage the model was good at
+
+`exo commitments --scan` finds promises in both directions and keeps them until discharged.
+All the prior art agrees precision beats recall, and Area F puts a number on it: *P ≈ 0.9 even at
+R = 0.5*. Measured on twelve hand-labelled messages: **P = 1.00, R = 0.67, zero false positives** —
+including on all six near-misses, each of which contains a commitment-shaped phrase and none of
+which is a promise (a request, a denial of ability, a relayed permission, a hedge).
+
+Three checks run in code before anything is stored: the quote must be **verbatim**, must contain
+a first-person **commissive** marker, and the writer must be the **promiser**. That last one is
+there because of a real message in this corpus — *"She said - I'll see what I can learn on my
+end!!!"* — which is `trust='self'`, is textbook commissive, and belongs to somebody else. Trust is
+assigned by capture path and is never overridden by a model.
+
+**This is the best any stage here has done with the on-device model**, and the reason is worth
+naming: recognizing a speech act in one short message is easy where judging two long notes is not.
+The model was never uniformly bad — 0 quotes failed the verbatim check here, against 38-of-40
+confabulation in the connection stage. Full numbers in [RESULTS.md §10](RESULTS.md).
+
 ## Decay — which is not retention, and must never be confused with it
 
 Both are "the system forgetting things" and they could not be more different.
@@ -170,7 +193,7 @@ only hid would be a compliance failure. Separate files, separate commands, on pu
 
 `R = exp(ln(0.9)·t/S)`, base stability 60 days, floor 0.30 — so **nothing goes cold until it has
 sat untouched for 686 days**, and one search resets the clock. Immune entirely: pinned rows,
-evidence under a *confirmed* belief, and beliefs in an open contradiction. Cold rows leave the
+**open commitments**, evidence under a *confirmed* belief, and beliefs in an open contradiction. Cold rows leave the
 connection pool, the episode pool and the default search; `--include-cold` still finds them.
 
 **The clock is `ingested_at`, not `ts`.** The first pass demoted 2,533 rows, every one from the
@@ -237,6 +260,8 @@ in Phase 1 and not Phase 6.
 ## Next
 
 **Area F's DAG is built** — S1 segment, S2 summarize, S4 contradict, S5 connect, S6 decay, S8
-brief — and `exo dream` runs it. Still missing: EM-LLM's graph-theoretic refinement of S1's
-boundaries, and *commitments until discharged* in the never-decay set, which needs the Ledger
-daemon to exist first. Then the daemons — Scout, Butler, Ledger, Historian, Editor.
+brief — plus the **Ledger** daemon, and `exo dream` runs all of it. Four daemons remain:
+**Scout** (nightly, question rot at 60d), **Butler** (calendar T−30, cap 5 bullets — it can now
+lead with unresolved commitments, which is what it was waiting for), **Historian** (Sunday,
+*"some weeks have no story; say so"*), **Editor** (on request only, never autonomous). Plus
+EM-LLM's graph-theoretic refinement of S1's boundaries.
