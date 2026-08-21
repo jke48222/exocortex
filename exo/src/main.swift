@@ -934,6 +934,160 @@ case "ledger-test":
 
     print("\n  \(pass) passed, \(fail) failed")
 
+case "wonder":
+    let s = Store(dbPath); Scout.migrate(s)
+    let text = positional().joined(separator: " ")
+    guard !text.isEmpty else { print("usage: exo wonder \"is X the right approach for Y?\""); break }
+    let id = Scout.register(s, text: text)
+    s.checkpoint()
+    print("open question \(id) — expires in \(Scout.rotDays) days unless answered")
+    print("  keys: \(Scout.searchKeys(s, text).map { "\($0.0)×\($0.1)" }.joined(separator: " "))")
+    print("  `exo scout` sweeps now; the nightly dream watches from here on.")
+
+case "questions":
+    let s = Store(dbPath); Scout.migrate(s)
+    _ = Scout.expireRotted(s)
+    let qs = Scout.open(s)
+    if qs.isEmpty { print("no open questions — `exo wonder \"...\"` to hold one"); break }
+    print("")
+    for q in qs {
+        let hits = s.scalar("SELECT count(*) FROM question_hit WHERE q_id='\(Ledger.esc(q.id))';")
+        print("  \(q.id)  \(q.text)")
+        print("    asked \(q.askedAt.prefix(10)) · \(q.daysLeft)d before it rots · \(hits) sighting(s)")
+        for r in s.rows("""
+            SELECT quote, coalesce(note,'') FROM question_hit
+            WHERE q_id='\(Ledger.esc(q.id))' ORDER BY found_at DESC LIMIT 3;
+            """) {
+            print("      · \"\(r[0].prefix(80))\"\(r[1].isEmpty ? "" : " — \(r[1].prefix(60))")")
+        }
+        print("")
+    }
+    print("  exo answered <id> \"...\"     close it with what you learned")
+
+case "answered":
+    let s = Store(dbPath); Scout.migrate(s)
+    let pos = positional()
+    guard pos.count >= 2 else { print("usage: exo answered <q_id> \"what you learned\""); break }
+    if Scout.answer(s, id: pos[0], text: pos.dropFirst().joined(separator: " ")) {
+        s.checkpoint(); print("answered — it will not be scanned again")
+    } else { print("no open question \(pos[0])") }
+
+case "scout":
+    if #available(macOS 26.0, *) {
+        let s = Store(dbPath)
+        let t0 = Date()
+        let r = await Scout.scan(s, verbose: flag("--verbose"))
+        s.checkpoint()
+        if r.judgeFailed {
+            print("on-device screening unavailable — \(r.lastError)")
+            print("Candidates went unjudged. NOT a clean sweep; re-run later.")
+            break
+        }
+        print("""
+          \(r.questions) open question(s) · \(r.expired) rotted away
+          \(r.candidates) candidate(s) · \(r.noTightKey) lacked a tight key · \(r.judged) described · \(r.stored) sightings kept · \(r.rejectedQuote) quotes failed verification\(r.broad > 0 ? " · \(r.broad) question(s) too broad to confirm" : "")
+          \(String(format: "%.1f", Date().timeIntervalSince(t0)))s
+        """)
+    } else { print("needs macOS 26+") }
+
+case "scout-test":
+    let s = Store(dbPath); Scout.migrate(s)
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  ✅ \(label)"); pass += 1 }
+        else { print("  ❌ \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+    func wipe() {
+        s.exec("DELETE FROM question WHERE text LIKE 'scouttest:%';")
+        s.exec("DELETE FROM events WHERE source='scouttest';")
+    }
+    wipe()
+
+    // ── rot is arithmetic, and enforced ──
+    let f = ISO8601DateFormatter()
+    let qid = Scout.register(s, text: "scouttest: does the flux capacitor need shielding?",
+                             askedAt: f.date(from: "2026-08-01T00:00:00Z")!)
+    let exp = s.rows("SELECT expires_at FROM question WHERE q_id='\(qid)';").first?.first ?? "-"
+    chk("expiry is asked_at + \(Scout.rotDays) days", String(exp.prefix(10)), "2026-09-30")
+    let old = Scout.register(s, text: "scouttest: long-forgotten question",
+                             askedAt: f.date(from: "2026-06-01T00:00:00Z")!)
+    _ = Scout.expireRotted(s)
+    chk("a \(Scout.rotDays)+ day question rots on scan",
+        s.rows("SELECT status FROM question WHERE q_id='\(old)';").first?.first ?? "-", "expired")
+    chk("…and leaves the open set",
+        String(Scout.open(s).contains { $0.id == old }), "false")
+
+    // ── search keys choose themselves by rarity ──
+    let keys = Scout.searchKeys(s, "what did the int8 rescore tier turn out to be good for")
+    chk("rare terms are kept as keys",
+        String(keys.contains { $0.0 == "int8" } && keys.contains { $0.0 == "rescore" }), "true")
+    chk("corpus-wide words are not",
+        String(keys.contains { $0.0 == "what" }), "false")
+    print("     ^ mid-frequency words like 'good' ride along by design — BM25 does the ranking")
+    print("     ^ measured: int8×7, rescore×16, what×3,865 — the split chooses its own keys")
+
+    // ── candidates: eligibility, cursor, self-echo ──
+    let now = nowMicros()
+    func add(_ text: String, _ hash: String) {
+        s.exec("""
+            INSERT INTO events(ts,ts_tz,source,source_kind,trust,retention,text,content_hash,ingested_at)
+            VALUES(\(now), 0, 'scouttest', 'own_file', 'self', 'text', '\(text)', '\(hash)', \(now));
+            """)
+    }
+    // Both fixtures must clear eligibleSQL's 120-char floor, or neither is ever a
+    // candidate and the echo check below passes vacuously — which is exactly how the
+    // first version of this test lied.
+    add("the flux capacitor overheated again during the long soak test yesterday evening, and the shielding plate discolored where it faces the coil assembly", "sc1")
+    add("scouttest: does the flux capacitor need shielding? was the question typed into the terminal this morning and transcribed into the corpus by the capture fleet", "sc2")
+    let q = Scout.open(s).first { $0.id == qid }!
+    let cands = Scout.candidates(s, q, keys: Scout.searchKeys(s, q.text))
+    chk("a bearing passage is a candidate",
+        String(cands.contains { $0.text.contains("overheated") }), "true")
+    chk("the question's own registration echo is not",
+        String(cands.contains { $0.text.contains("typed into the terminal") }), "false")
+    print("     ^ the corpus transcribes the terminal, so every question soon contains itself")
+
+    // ── relevance is arithmetic: the tight-key gate ──
+    chk("a passage carrying a tight key bears by construction",
+        String(Scout.bearsOnQuestion("building the rescore tier went well", tightKeys: ["rescore", "int8"])), "true")
+    chk("a passage that only matched wide keys does not",
+        String(Scout.bearsOnQuestion("good morning everyone, wear what we did last time", tightKeys: ["rescore", "int8"])), "false")
+    chk("…and no tight keys means nothing can bear",
+        String(Scout.bearsOnQuestion("anything at all", tightKeys: [])), "false")
+    print("     ^ the model refused 8/8 candidates including 'the rescore improves retrieval';")
+    print("       relevance moved into code, where it separates the live sweep perfectly")
+
+    // ── the verbatim gate, same as commitments ──
+    let seqs = s.rows("SELECT seq FROM events WHERE source='scouttest' ORDER BY seq;").compactMap { Int64($0[0]) }
+    let passage = "the flux capacitor overheated again during the long soak test"
+    chk("a verbatim quote verifies",
+        String(Connect.normalizeTerm(passage).contains(Connect.normalizeTerm("capacitor overheated again"))), "true")
+    chk("a paraphrase does not",
+        String(Connect.normalizeTerm(passage).contains(Connect.normalizeTerm("the capacitor got too hot"))), "false")
+
+    // ── dedup, surfacing, cascade ──
+    s.exec("INSERT OR IGNORE INTO question_hit(q_id,seq,quote,found_at) VALUES('\(qid)',\(seqs[0]),'q','\(Ledger.now())');")
+    s.exec("INSERT OR IGNORE INTO question_hit(q_id,seq,quote,found_at) VALUES('\(qid)',\(seqs[0]),'q','\(Ledger.now())');")
+    chk("the same sighting is stored once",
+        String(s.scalar("SELECT count(*) FROM question_hit WHERE q_id='\(qid)';")), "1")
+    let fresh = Scout.forBrief(s, limit: 5).filter { $0.qid == qid }
+    chk("an unsurfaced sighting reaches the brief", String(fresh.count), "1")
+    Scout.markSurfaced(s, fresh.map { ($0.qid, $0.seq) })
+    chk("and never twice",
+        String(Scout.forBrief(s, limit: 5).filter { $0.qid == qid }.count), "0")
+    _ = Scout.answer(s, id: qid, text: "yes, shielded")
+    chk("an answered question stops surfacing even undelivered hits",
+        String(Scout.forBrief(s, limit: 5).filter { $0.qid == qid }.count), "0")
+    s.exec("DELETE FROM events WHERE seq=\(seqs[0]);")
+    chk("deleting the sighted event deletes the sighting",
+        String(s.scalar("SELECT count(*) FROM question_hit WHERE seq=\(seqs[0]);")), "0")
+    s.exec("DELETE FROM question WHERE q_id='\(qid)';")
+    chk("deleting the question deletes its remaining hits",
+        String(s.scalar("SELECT count(*) FROM question_hit WHERE q_id='\(qid)';")), "0")
+
+    wipe(); s.checkpoint()
+    print("\n  \(pass) passed, \(fail) failed")
+
 case "historian":
     if #available(macOS 26.0, *) {
         let s = Store(dbPath); Historian.migrate(s)
@@ -1272,6 +1426,16 @@ case "brief":
         for c in owedToMe { print("    owed to you · \(c.action)\(c.due.isEmpty ? "" : " (\(c.due))") — \(c.ageDays)d ago") }
         print("")
     }
+    Scout.migrate(s)
+    let sightings = Scout.forBrief(s, limit: 2)
+    if !sightings.isEmpty {
+        print("  You wondered")
+        for h in sightings {
+            print("    \(h.question.prefix(70))")
+            print("      · \"\(h.quote.prefix(90))\"  (\(h.source), \(h.day))")
+        }
+        print("")
+    }
     if !eps.isEmpty {
         print("  \(lastDay)")
         for e in eps {
@@ -1309,7 +1473,11 @@ case "brief":
         print("")
     }
     // Marked only once shown. A brief that repeats itself is a brief you stop reading.
-    if !flag("--peek") { Connect.markSurfaced(s, conns.map(\.id)); s.checkpoint() }
+    if !flag("--peek") {
+        Connect.markSurfaced(s, conns.map(\.id))
+        Scout.markSurfaced(s, sightings.map { ($0.qid, $0.seq) })
+        s.checkpoint()
+    }
 
 case "dream":
     // The nightly DAG, as far as it is built: S4 contradiction detection and S5 connection
@@ -1341,6 +1509,11 @@ case "dream":
                                    days: Int(opt("--commit-days", "14")) ?? 14, verbose: false)
         if pr.judgeFailed { print("    unavailable: \(pr.lastError)") }
         else { print("    \(pr.scanned) scanned · \(pr.detected) proposed · \(pr.stored) survived the checks") }
+
+        print("Scout  open questions")
+        let sc = await Scout.scan(s, verbose: false)
+        if sc.judgeFailed { print("    unavailable: \(sc.lastError)") }
+        else { print("    \(sc.questions) open · \(sc.expired) rotted · \(sc.stored) sighting(s) kept of \(sc.judged) judged") }
 
         print("S4  contradictions")
         let c4 = await Contradict.scan(s, includeUnconfirmed: false,

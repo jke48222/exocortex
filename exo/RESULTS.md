@@ -889,3 +889,79 @@ quietly break it. What the 3B produces is a competent, citation-verified *digest
 narrative quality Area F says is the product. So the durable part of this daemon is the harness:
 assembly, selection, verification, the no-story default, the Sunday trigger in `exo dream`, the
 cascade. The model is the swappable part; a frontier-quality local model changes one function.
+
+---
+
+## 13. Scout — relevance is arithmetic, and the third sighting of primed refusal
+
+Area F's Scout is *nightly + new open question · SLM filter → frontier on survivors · question
+rot at 60 d.* Half of that cannot run here and the code says so up front: "frontier on
+survivors" means sending the question out to be researched, and the corpus's non-negotiable
+property is that nothing leaves the machine. What ships is the memory-side Scout — the half no
+web service can be: **you wondered about something on the 3rd, and something bearing on it
+crossed your stream on the 19th.** `exo wonder` registers; the nightly dream watches; unanswered
+questions rot at 60 days, enforced at scan time, because Area F names rot as the failure mode
+that kills this daemon.
+
+### 13.1 A question's search keys choose themselves by rarity
+
+A question is prose, and FTS5's implicit-AND over ten words of prose matches nothing. Its
+**rare terms** are what discriminate, and §7's `corpusFrequency` picks them with no tuning:
+
+| term of *"what did the int8 rescore tier turn out to be good for"* | corpus frequency | kept? |
+|---|---:|---|
+| `int8` | 7 | key, **tight** |
+| `rescore` | 16 | key, **tight** |
+| `tier` | 189 | key, wide |
+| `turn` / `did` / `good` | 420 / 1,266 / 1,595 | key, wide |
+| `what` | 3,865 | cut |
+
+Two bands, two jobs: **wide keys (≤ 2,000)** cast the BM25 net for recall; **tight keys (≤ 60,
+§7's rarity ceiling)** decide relevance.
+
+### 13.2 The model refused 8 of 8, so the decision moved into code
+
+The first sweep asked the model whether each candidate bears on the question — a `bears: Bool`,
+with instructions warning that *"most passages that share a word with a question have nothing to
+say about it."* It declined **8 of 8**, including the passage that reads *"the rescore improves
+retrieval."* Third sighting of the same animal: primed toward the cautious answer, this model
+gives it near-constantly — 14/14 `scope_difference` (§6), an escape hatch used 0/39 (§7),
+8/8 "does not bear" here.
+
+So relevance became arithmetic: **a candidate bears on the question iff it contains a tight
+key.** On the live sweep that separates perfectly with no model in the loop — the six
+rescore-saga transcripts pass on `int8`/`rescore`; the NSBE group-chat tapback that matched via
+`good`×1,595 fails; *"top-tier needs to mean ruthlessly prioritized"* (matched `tier`×189) fails.
+A question with no tight keys is reported as **too broad to confirm sightings for** rather than
+guessed at. The model's remaining job is §10's proven one — copy the relevant span verbatim
+(checked in code) and write one sentence — and at that it went 7 described, 6 verified, 1 quote
+rejected.
+
+### 13.3 The live sweep answered the question with the corpus's own retraction arc
+
+Question: *what did the int8 rescore tier turn out to be good for.* Sightings, all verified
+verbatim, in stream order:
+
+```
+· "Building the rescore tier — the two-stage design Area D specified…"
+· "the discrepancy is in my int8 handling"
+· "cosine (rank 32) beats Hamming (rank 90) over the full chunk set…"
+· "With controlled ground truth the rescore *improves* retrieval exactly as Area D…"
+· "The tier works. My evaluation was broken."
+· "That's the answer: 2 of the top 6 are topically relevant — **weak but nonzero**"
+```
+
+That is §4's build-break-retract-confirm story, reassembled by a standing question in 13.5 s.
+
+Two guards that exist because of how this corpus is fed: **self-echo** — the question is typed
+into a terminal that Claude Code transcribes, so within a day the corpus contains the
+registration verbatim, and a hit whose text contains the question is the question coming back —
+and the usual eligibility/automation filters, which kept marketing mail out of the candidate set.
+
+### 13.4 A cascade only fires on a connection that asked for it
+
+Housekeeping footnote, kept because it will bite again: deleting the demo question through the
+`sqlite3` CLI orphaned its six hits. `exo` opens every connection with `PRAGMA foreign_keys=ON`;
+**the sqlite3 shell does not**, and SQLite's FK enforcement — cascades included — is per-
+connection. A cleanup run through an outside tool silently skips every `ON DELETE CASCADE` in
+the schema.
