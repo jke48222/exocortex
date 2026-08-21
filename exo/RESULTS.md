@@ -614,3 +614,67 @@ task, which is the one thing §6.2 and §7.4 both found this model does reliably
 
 `vectors.i8` also has to be read as `hex(v.i8)` — it is a BLOB, and the text-based row reader
 silently loses every byte that is not valid UTF-8.
+
+---
+
+## 9. Decay — the clock was measuring the wrong thing
+
+S6 completes Area F's DAG. `R = exp(ln(0.9)·t/S)`, base stability 60 days, floor 0.30.
+
+**Do the arithmetic rather than reading the constants.** `R < 0.30` needs
+`t/S > ln(0.30)/ln(0.9) = 11.4`, so nothing goes cold until it has sat untouched for
+**686 days — nearly two years** — and one search resets the clock while raising `S`.
+
+### 9.1 The first pass demoted 2,533 rows and every one of them was wrong
+
+| source | would have gone cold |
+|---|---:|
+| `iphone.whatsapp` | 951 |
+| `iphone.calendar` | 799 |
+| `iphone.call` | 686 |
+| `iphone.voicemail` / `.note` / `.voicememo` | 97 |
+| **anything else** | **0** |
+
+Every single one came from the iPhone backup, and the samples read *"Sydney Holt's Birthday"*,
+*"Dale Austin's birthday"*, *"moms birthday"*. Their `ts` is years old; **they had been in this
+store for a week.** Nothing had been neglected.
+
+`events.ts` is when a thing *happened*. Decay measures *disuse*, which needs to know when you
+**got** it — so the clock is now `ingested_at`, added to the insert path. Rows that predate the
+column are backfilled to the migration moment, because the honest statement about a row whose
+arrival was never recorded is "the clock starts when we started measuring."
+
+**Consequence: the first decay pass over a backfilled corpus demotes 0, and that is the correct
+answer.** 100,106 considered, 0 demoted, 1 immune.
+
+### 9.2 Decay is not retention
+
+| | retention | decay |
+|---|---|---|
+| basis | **legal** — TTL by class, FRCP 37(e) | **functional** — FSRS on memory strength |
+| action | **deletes** | **hides**; row, text, vectors and FTS entry all remain |
+| litigation hold | suspends it | irrelevant — nothing is destroyed |
+| reversible | no | **yes** — retrieval revives, and strengthens |
+
+A decay pass that deleted would be spoliation dressed as housekeeping; a retention pass that only
+hid would be a compliance failure. Six of `decay-test`'s fifteen checks exist purely to hold that
+line: the row survives, its text survives, its FTS entry survives so `--include-cold` still finds
+it, the default search hides it, retrieval revives it, and `R` never reaches zero at any age.
+
+### 9.3 FSRS needs a signal this system had never recorded
+
+Two years of capture and **not one row saying "you looked at this."** `access` is new here, and
+what counts as a retrieval is a judgement call worth naming: *surfaced* in a result list
+strengthens weakly (0.6), *opened* strengthens fully (2.0). The Remembrance Agent's finding is the
+argument for counting the weak one at all — Rhodes found that seeing the one-line result usually
+triggers the memory without opening anything.
+
+Stability grows most when the retrieved memory was nearly forgotten — `S' = S·(1 + w·(1−R))`.
+That is the spacing effect, and it is why FSRS beats a fixed half-life: a flat multiplier gives an
+already-hot row unbounded stability while a row rescued from the edge gains the same little as
+everything else, which is exactly backwards.
+
+**Never decays:** pinned rows, evidence under a *confirmed* belief (demoting it would leave a
+belief whose provenance you cannot see), and beliefs in an open contradiction. Area F also names
+*commitments until discharged*; that clause is written and currently unreachable, because the
+Ledger daemon that produces commitments does not exist yet.

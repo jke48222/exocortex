@@ -1,8 +1,9 @@
 # exo — Exocortex capture fleet + retrieval + belief ledger + dream cycle
 
-**Phases 1–6.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
+**Phases 1–7.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
 bitemporal belief ledger → contradiction detection → connection discovery → episode segmentation
-and recall, with the retention policy and capture-exclusion list shipped *now* rather than later.
+and recall → engineered forgetting, with the retention policy and capture-exclusion list shipped
+*now* rather than later.
 
 **Measured results, including one that contradicts the research: [RESULTS.md](RESULTS.md).**
 
@@ -36,12 +37,15 @@ bash build/build.sh          # -> build/exo
 ./build/exo connect --histogram             # calibrate the band before trusting it
 ./build/exo segment                         # cut the day into episodes, then summarize
 ./build/exo day                             # yesterday, as episodes with citations
-./build/exo dream                           # the nightly DAG: S4 + S5
+./build/exo decay                           # S6 dry run; --apply to demote
+./build/exo pin <seq>                       # pinned rows never decay
+./build/exo dream                           # the nightly DAG: S1 S2 S4 S5 S6
 ./build/exo brief                           # the morning read-out (at most 3)
 ./build/exo ledger-test                     # 7/7   bitemporal invariants
 ./build/exo contra-test                     # 15/15 detection + resolution invariants
 ./build/exo connect-test                    # 13/13 eligibility, grounding, cascade
 ./build/exo segment-test                    # 10/10 surprise, boundaries, citation cascade
+./build/exo decay-test                      # 15/15 the curve, immunity, and never deleting
 ```
 
 ## Backup
@@ -150,6 +154,31 @@ the other, and a schema-level escape hatch went unused 39 times out of 39. Inter
 notes and keeping rare terms makes the link grounded *by construction*. Full numbers in
 [RESULTS.md §7](RESULTS.md).
 
+## Decay — which is not retention, and must never be confused with it
+
+Both are "the system forgetting things" and they could not be more different.
+
+| | retention | decay |
+|---|---|---|
+| basis | **legal** — TTL by class, the FRCP 37(e) defense | **functional** — FSRS on memory strength |
+| action | **deletes** the row | **hides** it; the row, its text, its vectors and its FTS entry all stay |
+| litigation hold | suspends it | irrelevant — nothing is destroyed |
+| reversible | no | **yes** — retrieving a cold row revives it, stronger than before |
+
+A decay pass that deleted would be spoliation dressed as housekeeping; a retention pass that
+only hid would be a compliance failure. Separate files, separate commands, on purpose.
+
+`R = exp(ln(0.9)·t/S)`, base stability 60 days, floor 0.30 — so **nothing goes cold until it has
+sat untouched for 686 days**, and one search resets the clock. Immune entirely: pinned rows,
+evidence under a *confirmed* belief, and beliefs in an open contradiction. Cold rows leave the
+connection pool, the episode pool and the default search; `--include-cold` still finds them.
+
+**The clock is `ingested_at`, not `ts`.** The first pass demoted 2,533 rows, every one from the
+iPhone backup — 951 WhatsApp messages, 799 calendar entries, and samples reading "Sydney Holt's
+Birthday" and "moms birthday". Their event time is years old; they had been in the store a week.
+Nothing had been neglected. `ts` is when a thing *happened*; decay measures *disuse*, which needs
+to know when you got it. Full numbers in [RESULTS.md §9](RESULTS.md).
+
 ## Retention — the FRCP 37(e) defense
 
 | Class | TTL | Why |
@@ -207,8 +236,7 @@ in Phase 1 and not Phase 6.
 
 ## Next
 
-S1, S2, S4, S5 and S8 of Area F's DAG are built and `exo dream` runs them. Still missing: **S6**
-FSRS decay (`R = exp(ln(0.9)·t/S)`, demote to cold storage, never hard-delete; never decay
-commitments until discharged, contradictions until resolved, or anything pinned), and EM-LLM's
-graph-theoretic refinement of S1's boundaries. Then the daemons — Scout, Butler, Ledger,
-Historian, Editor.
+**Area F's DAG is built** — S1 segment, S2 summarize, S4 contradict, S5 connect, S6 decay, S8
+brief — and `exo dream` runs it. Still missing: EM-LLM's graph-theoretic refinement of S1's
+boundaries, and *commitments until discharged* in the never-decay set, which needs the Ledger
+daemon to exist first. Then the daemons — Scout, Butler, Ledger, Historian, Editor.

@@ -575,13 +575,20 @@ case "search":
         break
     }
 
-    let hits = store.search(q, limit: limit, minTrust: mt.isEmpty ? nil : mt)
+    let hits = store.search(q, limit: limit, minTrust: mt.isEmpty ? nil : mt,
+                            includeCold: flag("--include-cold"))
     if hits.isEmpty { print("no matches for: \(q)"); break }
     for h in hits {
         print("[\(stamp(h.ts))] \(h.app) — \(h.title)")
         if !h.snip.isEmpty { print("    \(h.snip.replacingOccurrences(of: "\n", with: " "))") }
         print("    seq=\(h.seq) src=\(h.source) trust=\(h.trust) bm25=\(String(format: "%.2f", h.score))")
     }
+    // S6's missing half. FSRS needs retrievals to strengthen against and this system had
+    // never recorded one — two years of capture without a single row saying "you looked at
+    // this". Surfacing counts as a retrieval on the Remembrance Agent's finding that seeing
+    // the one-line result usually triggers the memory without opening anything.
+    Decay.record(store, seqs: hits.map { Int64($0.seq) }, kind: "surfaced")
+    store.checkpoint()
 
 case "retention":
     let store = Store(dbPath)
@@ -927,6 +934,45 @@ case "ledger-test":
 
     print("\n  \(pass) passed, \(fail) failed")
 
+case "decay":
+    // S6. `--apply` is required to change anything; the default is a dry run, exactly like
+    // `exo retention`. The two are deliberately separate commands: retention DELETES on a
+    // legal schedule, decay HIDES on a functional one, and a cold row survives both a
+    // litigation hold and an explicit search.
+    let s = Store(dbPath); Decay.migrate(s)
+    let fl = Double(opt("--floor", "")) ?? Decay.floor
+    let dr = Decay.run(s, apply: flag("--apply"), floor: fl,
+                       limit: Int(opt("--limit", "200000")) ?? 200_000)
+    s.checkpoint()
+    print("R = exp(ln(0.9)·t/S), floor \(String(format: "%.2f", fl)), base stability \(Int(Decay.baseStability))d\n")
+    let dtotal = max(1, dr.hist.reduce(0, +))
+    for (i, n) in dr.hist.enumerated() where n > 0 {
+        print(String(format: "  R %.1f..%.1f  %7d  %@", Double(i) / 10, Double(i) / 10 + 0.1, n,
+                     String(repeating: "█", count: max(1, n * 42 / dtotal))))
+    }
+    print("""
+
+      \(fmt(dr.considered)) considered · \(fmt(dr.immune)) immune (pinned, confirmed-belief evidence, open contradictions)
+      \(fmt(dr.demoted)) to demote · \(fmt(dr.revived)) to revive\(flag("--apply") ? " — APPLIED" : "  (dry run; --apply to write)")
+    """)
+    if !dr.examples.isEmpty {
+        print("\n  first few that would go cold:")
+        for (q, rr, txt) in dr.examples {
+            print(String(format: "    [%d] R=%.3f  %@", q, rr,
+                         txt.replacingOccurrences(of: "\n", with: " ")))
+        }
+    }
+    print("\n  Nothing is deleted. A cold row is still in the store, still under any hold,")
+    print("  still returned by `exo search --include-cold`, and revived by being retrieved.")
+
+case "pin":
+    let s = Store(dbPath)
+    guard let q = positional().first.flatMap(Int64.init) else {
+        print("usage: exo pin <seq> [--off]"); break
+    }
+    Decay.pin(s, q, !flag("--off")); s.checkpoint()
+    print("\(flag("--off") ? "unpinned" : "pinned") \(q) — pinned rows never decay")
+
 case "segment":
     let s = Store(dbPath); Segment.migrate(s)
     var p = Segment.Params()
@@ -1090,8 +1136,12 @@ case "dream":
         else {
             print("    \(fmt(c5.scanned)) neighbour pairs · \(c5.candidates) candidates · \(c5.grounded) share a rare term · \(c5.kept) kept")
         }
+        print("S6  decay")
+        let d6 = Decay.run(s, apply: true, floor: Decay.floor, limit: 500_000)
+        print("    \(fmt(d6.considered)) considered · \(fmt(d6.immune)) immune · \(fmt(d6.demoted)) demoted · \(fmt(d6.revived)) revived")
+
         s.checkpoint()
-        print("\n\(String(format: "%.0f", Date().timeIntervalSince(t0)))s. S6 FSRS decay is not built yet, and neither is EM-LLM's graph refinement of S1's boundaries.")
+        print("\n\(String(format: "%.0f", Date().timeIntervalSince(t0)))s. EM-LLM's graph refinement of S1 boundaries is not built yet, and neither is EM-LLM's graph refinement of S1's boundaries.")
         print("Run `exo brief` for the morning read-out.")
     } else { print("needs macOS 26+") }
 
@@ -1227,6 +1277,94 @@ case "contra-resolve":
     case .ok(let note): s.checkpoint(); print("\(pos[1]): \(note)")
     case .failed(let why): print("not resolved — \(why)")
     }
+
+case "decay-test":
+    let s = Store(dbPath); Decay.migrate(s); Ledger.migrate(s)
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  ✅ \(label)"); pass += 1 }
+        else { print("  ❌ \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+
+    // ── the curve ──
+    chk("R = 0.9 at exactly one stability",
+        String(format: "%.4f", Decay.retrievability(daysSince: 60, stability: 60)), "0.9000")
+    chk("R = 1 at zero elapsed",
+        String(format: "%.4f", Decay.retrievability(daysSince: 0, stability: 60)), "1.0000")
+    chk("R falls monotonically",
+        String(Decay.retrievability(daysSince: 200, stability: 60)
+             < Decay.retrievability(daysSince: 100, stability: 60)), "true")
+    chk("R never reaches zero — decay hides, it does not erase",
+        String(Decay.retrievability(daysSince: 36500, stability: 60) > 0), "true")
+
+    // The spacing effect: rescuing a nearly-forgotten memory is worth more than
+    // re-reading a fresh one. A flat multiplier gets this exactly backwards.
+    let gainFresh = Decay.strengthen(stability: 60, retrievability: 0.99, weight: 0.6) - 60
+    let gainFaded = Decay.strengthen(stability: 60, retrievability: 0.31, weight: 0.6) - 60
+    chk("a faded memory gains more from retrieval than a fresh one",
+        String(gainFaded > gainFresh * 5), "true")
+    chk("opening is worth more than merely surfacing",
+        String((Decay.weights["opened"] ?? 0) > (Decay.weights["surfaced"] ?? 0)), "true")
+
+    // ── the pass, on a fixture aged past the floor ──
+    let marker = "decaytest"
+    s.exec("DELETE FROM events WHERE source='\(marker)';")
+    // 800 days, not 400. At the base stability of 60 days, R < 0.30 needs
+    // t/S > ln(0.30)/ln(0.9) = 11.4, i.e. **686 days untouched** — nearly two years. The
+    // first version of this test used 400 days, where R is still 0.495, and failed against
+    // perfectly correct code.
+    let old = nowMicros() - 800 * 86_400_000_000
+    for i in 0..<3 {
+        s.exec("""
+            INSERT INTO events(ts,ts_tz,source,source_kind,trust,retention,text,content_hash,ingested_at)
+            VALUES(\(old + Int64(i)), 0, '\(marker)', 'own_file', 'self', 'text',
+                   'decay fixture note \(i) about nothing in particular', 'dk\(i)', \(old + Int64(i)));
+            """)
+    }
+    let seqs = s.rows("SELECT seq FROM events WHERE source='\(marker)' ORDER BY seq;").compactMap { Int64($0[0]) }
+    guard seqs.count == 3 else { print("  ❌ fixture: \(seqs.count) events"); break }
+    Decay.pin(s, seqs[2], true)
+
+    _ = Decay.run(s, apply: true, floor: Decay.floor, limit: 500_000)
+    func tier(_ q: Int64) -> String {
+        s.rows("SELECT coalesce(tier,'hot') FROM memory_state WHERE seq=\(q);").first?.first ?? "hot"
+    }
+    chk("an 800-day-untouched row goes cold (the floor is ~686d at S=60)", tier(seqs[0]), "cold")
+    chk("a pinned row never does", tier(seqs[2]), "hot")
+    chk("going cold does not delete the row",
+        String(s.scalar("SELECT count(*) FROM events WHERE seq=\(seqs[0]);")), "1")
+    chk("…nor its text",
+        String(s.scalar("SELECT count(*) FROM events WHERE seq=\(seqs[0]) AND length(text)>10;")), "1")
+    chk("…nor its FTS entry, so an explicit search still finds it",
+        String(s.search("decay fixture", limit: 5, minTrust: nil, includeCold: true)
+                .contains { Int64($0.seq) == seqs[0] }), "true")
+    chk("but the default search hides it",
+        String(s.search("decay fixture", limit: 5, minTrust: nil, includeCold: false)
+                .contains { Int64($0.seq) == seqs[0] }), "false")
+
+    // Retrieval revives. Demotion has to be reversible or it is deletion with extra steps.
+    Decay.record(s, seqs: [seqs[0]], kind: "opened")
+    chk("retrieving a cold row brings it back", tier(seqs[0]), "hot")
+    chk("…and it is stronger than it was",
+        String(Decay.state(s, seqs[0]).stability > Decay.baseStability), "true")
+
+    // Evidence under a CONFIRMED belief is immune; an unreviewed guess is not.
+    let run = Ledger.startRun(s, model: "test", version: "1", promptHash: "-", codeVersion: "-")
+    let cid = Ledger.upsertClaim(s, subject: "decaytest", predicate: "states", object: nil,
+                                 polarity: 1, scope: nil, norm: "a confirmed belief for the decay test")
+    let bid = Ledger.mindChange(s, from: nil, toClaim: cid, at: Ledger.now(), confidence: 1.0,
+                                confidenceSrc: "human_confirmed", runID: run, evidence: [seqs[1]])
+    s.exec("UPDATE memory_state SET tier='hot' WHERE seq=\(seqs[1]);")
+    _ = Decay.run(s, apply: true, floor: Decay.floor, limit: 500_000)
+    chk("evidence under a confirmed belief is immune", tier(seqs[1]), "hot")
+    print("     ^ demoting it would leave a belief whose provenance you cannot see")
+
+    s.exec("DELETE FROM belief_evidence WHERE belief_id='\(bid)';")
+    s.exec("DELETE FROM belief WHERE belief_id='\(bid)';")
+    s.exec("DELETE FROM claim WHERE subject='decaytest';")
+    s.exec("DELETE FROM events WHERE source='\(marker)';")
+    s.checkpoint()
+    print("\n  \(pass) passed, \(fail) failed")
 
 case "segment-test":
     let s = Store(dbPath); Segment.migrate(s)
