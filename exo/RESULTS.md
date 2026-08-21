@@ -562,3 +562,55 @@ forced *every* candidate to be gmail↔claudecode — a marketing email paired w
 Allowing same-source immediately surfaced two debugging sessions 48 days apart that had hit the
 same `aria-label` race. Crossing sources still feeds unexpectedness; it no longer decides
 eligibility.
+
+---
+
+## 8. Segmentation and summarization — surprise against a centroid, and citations that are checked
+
+### 8.1 Pairwise distance is not prediction error
+
+Event Segmentation Theory says people cut experience at moments of *prediction error*. The
+obvious implementation compares each event to the previous one; the correct one compares it to
+a **running centroid of the recent past**, and the difference is not cosmetic:
+
+| stream | max pairwise distance | surprise vs. centroid |
+|---|---:|---:|
+| A B A B A B (two topics interleaved) | **1.00** | **< 0.60 after the first two** |
+| A A A A A A → C C C C C C (a real switch) | 1.00 | **> 0.90 at the switch** |
+
+Interleaving two topics is *maximally surprising* at every single step pairwise, so a pairwise
+detector cuts on every event and segments nothing. Against a centroid it correctly reads as one
+episode, and a genuine switch still peaks. "Is this different from the last thing?" and "is this
+different from what I have been doing?" are different questions, and only the second one is
+prediction error.
+
+The threshold is **mean + k·sd of the day's own surprise**, not a constant: a day of one long
+build and a day of scattered errands have different surprise scales, and a cutoff calibrated on
+one over- or under-segments the other. A gap of 45 minutes cuts regardless of content.
+
+**Not built:** EM-LLM's graph-theoretic refinement, which shifts each boundary to its locally
+modularity-maximizing position. What ships is the surprise pass plus temporal contiguity.
+
+### 8.2 Citations are verified, not trusted
+
+Generative Agents cites record IDs, and Area F calls it *"the part most people drop, and it's
+what makes the derived layer auditable."* Each summary line carries the `seq` it came from, the
+citation column is `NOT NULL`, and a line citing a `seq` outside its own episode is **discarded**
+rather than stored — the same groundedness discipline that §7 needed after the model confabulated
+its links 38 times out of 40.
+
+On the real corpus (2026-08-20): **26 eligible events → 3 episodes → 21 cited lines, 0 dropped
+for citing outside the episode.** Titles came out as "Setting up exo development and
+authentication" and "Fixing proxy types and grammar tier issues". Summarization is a description
+task, which is the one thing §6.2 and §7.4 both found this model does reliably.
+
+### 8.3 Two things the day boundary got wrong
+
+- **`date(ts,'unixepoch')` is UTC.** An evening event landed in the next day's episode list, so
+  the read-out opened with something that happened before yesterday's dinner. A day is the
+  person's day: `'localtime'`.
+- **A stretch of one event is not an episode.** Short runs now merge into their neighbour;
+  without it the day's read-out led with a singleton episode holding one stray notification.
+
+`vectors.i8` also has to be read as `hex(v.i8)` — it is a BLOB, and the text-based row reader
+silently loses every byte that is not valid UTF-8.
