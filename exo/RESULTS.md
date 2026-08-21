@@ -456,3 +456,109 @@ like a quiet ledger. Both `scan` and `extract` now abort after 3 consecutive fai
 error text, in ~4 s, and say in as many words that this is **not** a clean bill of health. A stage
 that fails closed and stays quiet is indistinguishable from a clean ledger, which is the one lie
 this feature cannot afford to tell.
+
+---
+
+## 7. Connection discovery — similarity finds the corpus's hubs, and its hubs are its boilerplate
+
+S5 is the stage Area F calls "the whole ballgame". Stage 1 is fast and works as specified:
+**46,194 chunk-neighbour pairs from 500 anchors in 0.7 s.** Everything interesting happened
+in what came out of it.
+
+### 7.1 The first twelve findings were twelve pieces of infrastructure
+
+| rank | sim | what it connected |
+|---:|---:|---|
+| 1 | 0.911 | a Claude.ai sign-in **email** ↔ the Claude.ai sign-in **URL** |
+| 2 | 0.890 | the same email ↔ the same URL with a `state=` parameter |
+| 3–6 | 0.87–0.83 | four marketing emails ↔ `Base directory for this skill: /private/tmp/…` |
+| 7 | 0.862 | a Drive share notification ↔ the Drive folder URL |
+
+**None of Area F's filters touch this, and none of them can.** A login email and a login URL
+genuinely are different sources, genuinely 142 days apart, genuinely about one thing. The
+candidates were not wrong — *the assumption that similarity plus distance implies meaning was*.
+A life-log's most-connected documents are the ones it contains hundreds of copies of.
+
+### 7.2 What is actually in the corpus
+
+| source | vectorized events | eligible after filtering | why |
+|---|---:|---:|---|
+| `browser.*` | 21,616 | **0** | **21,523 (99.6%) are a bare URL.** A third of the whole index |
+| `gmail` | 3,315 | 1,212 | 34% carry U+034F marketing padding, 31% "unsubscribe", 17% `utm_` |
+| `claudecode` | 8,042 | 4,259 | repeated scaffolding: `[Request interrupted by user]` ×59, `<local-command-caveat>` ×45 |
+| `imessage` | 17,527 | 507 | 189 events are from 5–6 digit **short codes**, i.e. businesses |
+
+**88% of the vectorized corpus is ineligible to be one end of a connection.** This is the belief
+extractor's lesson in a different costume — there, 141 of the first 145 claims were task
+directives. The corpus does not contain what you assume in the proportions you assume.
+
+Two filters generalize past this corpus and are worth keeping:
+
+- **Hub suppression.** A document that is the nearest neighbour of more than *k* different
+  anchors is a hub, not a memory — document frequency applied to neighbours. Unlike a pattern
+  list it keeps working on boilerplate nobody has catalogued yet.
+- **Structure over substrings.** `looksAutomated` tests a *run* of invisible padding
+  characters, mixed-script homoglyphs, and URL density. The substring list kept losing: it
+  excluded U+034F and missed **501 rows padded with U+200C and 48 with U+200B**, and LinkedIn
+  hides "unsubscribe" at character **4,068 of 5,272**, past any truncated prefix.
+
+### 7.3 Two Swift bugs that made the filter silently useless
+
+- **`Character` iteration cannot see a ZWNJ.** Swift strings iterate as grapheme clusters, and
+  U+200C / U+200D are precisely the scalars whose job is to *glue a cluster together* — so
+  `Set<Character>` membership never matched, and every padded mail passed. `unicodeScalars` fixes
+  it. Confirmed against the bytes: `E2808C 20 E2808C 20 …`.
+- **Testing a truncated prefix.** Groundedness and automation were both checked against the
+  600-character display copy. 38 of 40 links were marked ungrounded, including `IDEA EXPEDITION`
+  and `content/site.json`, which are in the notes — just not in the first 600 characters.
+
+### 7.4 The model confabulates the link 95% of the time, and an escape hatch did not help
+
+| what the model was asked | result |
+|---|---|
+| "what do these have in common, in one sentence" | bare categories: `work`, `the condition`, `the remote`, `Mark` |
+| "name the ONE specific thing, copied word for word" | **38 of 40 confabulated.** Verified directly: `content/site.json` and `Turbopack` each occur in note B and **nowhere** in note A |
+| the same, plus a `sharesSomethingSpecific: Bool` it could set false | **used it 0 times out of 39** |
+
+That last row is a **negative result against Area F**, which expects an `unsupported_fields`
+escape hatch to *"measurably reduce confabulation by giving the model a licensed place to admit
+uncertainty."* Given the licensed place, in the schema and not merely in the prose, this model
+never took it.
+
+**So the link is computed, not asked for.** Intersect the two notes, keep terms that are rare in
+the corpus, and the link is grounded *by construction* rather than by a check that has to catch a
+confident wrong answer. The model's job shrinks to writing one sentence about a term it has been
+handed — the description task §6.2 established it does well, and it cannot confabulate a link it
+did not choose.
+
+Rarity is the discriminator, and it is document frequency for the **third** time in this file —
+hub suppression for documents, a ceiling on a proposed term, and now term selection itself.
+The ceiling was set by looking at output, not by picking a round number:
+
+| ceiling | what the links looked like |
+|---:|---|
+| 1,000 | `desktop`×619, `links`×404, `quote`×339, `fresh`×289 — words two work logs share by being work logs |
+| **60** | `turbopack`×5, `vital-signs`×6, `initials`×16, `innovative`×19, `aria-label`×20, `webgpu`×23, `postcss`×18 |
+
+60 also cuts `tinacms`×154, which was a genuine link. That is the precision-over-recall trade
+Area F asks for, taken knowingly: one false connection destroys trust in all of them; one missed
+true connection costs a morning's mild interest.
+
+### 7.5 The pipeline, end to end on the real corpus
+
+```
+46,194 neighbour pairs  →  181 candidates  →  35 share a rare term  →  19 described  →  3 in the brief
+        0.7 s                Δt≥30d, hub,        grounded by            ~1.5 s each
+                             automation          construction
+```
+
+The brief's top item, unedited: a **Rezi welcome email from 2025-12-16** connected to
+**2026-08-19 work on job-application tooling** by the term `resumes` (43 events), **246 days
+apart**, across two sources. That is the "you've been here before" the stage exists for.
+
+One more measured reversal: **`--cross-source-only` is off by default.** Area F's "different
+modality" filter assumes several rich modalities; this corpus has one, so requiring a crossing
+forced *every* candidate to be gmail↔claudecode — a marketing email paired with real work.
+Allowing same-source immediately surfaced two debugging sessions 48 days apart that had hit the
+same `aria-label` race. Crossing sources still feeds unexpectedness; it no longer decides
+eligibility.

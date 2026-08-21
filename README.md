@@ -10,7 +10,7 @@ Research: [`portfolio-research/PASS-4-exocortex-crossportfolio-research.md`](../
 
 | Component | Status | Headline |
 |---|---|---|
-| **[`exo/`](exo/)** — Phases 1–4: capture fleet → SQLite/FTS5 + vectors → belief ledger → contradictions | ✅ built, **7/7 + 15/15 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, four-way contradiction detection |
+| **[`exo/`](exo/)** — Phases 1–5: capture → vectors → belief ledger → contradictions → connections | ✅ built, **35/35 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, four-way contradiction detection, nightly dream cycle + morning brief |
 | **[`mcp-bus/`](mcp-bus/)** — the memory contract | ✅ **v1.0.0 FROZEN** | 9 tools, 4 trust tiers; invariants proven by smoke tests |
 
 ## exo — Phase 1
@@ -53,8 +53,7 @@ harness built, cross-client run pending).
 
 ## Next
 
-**Phase 5 — the rest of the dream cycle.** Contradiction detection is S4 of Area F's nightly DAG and
-is built; what remains is S1 segmentation by prediction error, S2 hierarchical map-reduce
-summarization, **S5 connection discovery** (ANN candidates → LLM judging, *at most 1–3 surfaced per
-morning — one false connection destroys trust in all of them*), S6 FSRS decay, and S8 the morning
-brief. Then the five daemons: Scout, Butler, Ledger, Historian, Editor.
+**Phase 6 — the rest of the dream cycle, then the daemons.** S4 contradictions, S5 connections and
+S8 the morning brief are built and `exo dream` runs them nightly. What remains is S1 segmentation by
+prediction error, S2 hierarchical map-reduce summarization, and S6 FSRS decay. Then the five
+daemons: Scout, Butler, Ledger, Historian, Editor.

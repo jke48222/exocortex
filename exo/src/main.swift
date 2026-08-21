@@ -927,6 +927,136 @@ case "ledger-test":
 
     print("\n  \(pass) passed, \(fail) failed")
 
+case "brief":
+    // S8 — the morning brief, and the only thing in this phase the principal actually sees.
+    //
+    // Area F's cap is the design: **at most 1-3 connections, because one false connection
+    // destroys trust in all of them.** Everything upstream — the eligibility filter, hub
+    // suppression, the rarity ceiling — exists to make three items worth reading. A brief
+    // that pads itself to look busy is the failure mode, so when there is nothing it says
+    // nothing, in one line.
+    let s = Store(dbPath); Connect.migrate(s); Ledger.migrate(s)
+    let n = Int(opt("--n", "3")) ?? 3
+    let conns = Connect.forBrief(s, limit: n)
+    let open = Contradict.open(s, limit: 3)
+    let f = DateFormatter(); f.dateFormat = "EEEE d MMMM"
+    print("\n\(f.string(from: Date()))\n")
+
+    if conns.isEmpty && open.isEmpty {
+        print("  Nothing worth your attention. (Some weeks have no story.)\n")
+        break
+    }
+    if !conns.isEmpty {
+        print("  You've been here before")
+        for c in conns {
+            print("\n    \(c.link)")
+            print("      \(c.dayA) · \(c.srcA) — \(c.textA.replacingOccurrences(of: "\n", with: " ").prefix(120))")
+            print("      \(c.dayB) · \(c.srcB) — \(c.textB.replacingOccurrences(of: "\n", with: " ").prefix(120))")
+            print("      \(c.daysApart) days apart · \(String(format: "%.2f", c.serendipity))")
+        }
+        print("")
+    }
+    if !open.isEmpty {
+        print("  The ledger says you hold both of these at once")
+        for o in open {
+            print("\n    A  \(o.textA.prefix(110))")
+            print("    B  \(o.textB.prefix(110))")
+            print("       exo contra-resolve \(o.id) …")
+        }
+        print("")
+    }
+    // Marked only once shown. A brief that repeats itself is a brief you stop reading.
+    if !flag("--peek") { Connect.markSurfaced(s, conns.map(\.id)); s.checkpoint() }
+
+case "dream":
+    // The nightly DAG, as far as it is built: S4 contradiction detection and S5 connection
+    // discovery, then S8. Area F's full pipeline also has segmentation, hierarchical
+    // summarization and FSRS decay in front of these; those are not here, and the runner
+    // says so rather than implying a complete night's work.
+    if #available(macOS 26.0, *) {
+        let s = Store(dbPath); Connect.migrate(s); Ledger.migrate(s)
+        let t0 = Date()
+        var p = Connect.Params()
+        p.anchors = Int(opt("--anchors", "500")) ?? 500
+        p.sinceDays = Int(opt("--since", "0")) ?? 0
+
+        print("S4  contradictions")
+        let c4 = await Contradict.scan(s, includeUnconfirmed: false,
+                                       limit: 2000, minSim: Contradict.minSim,
+                                       maxSim: Contradict.maxSim, verbose: false)
+        if c4.judgeFailed { print("    unavailable: \(c4.lastError)") }
+        else { print("    \(c4.candidates) overlapping pair(s) · \(c4.judged) judged · \(c4.recorded) new") }
+
+        print("S5  connections")
+        let c5 = await Connect.run(s, p, judgeLimit: Int(opt("--judge", "25")) ?? 25, verbose: false)
+        if c5.judgeFailed { print("    unavailable: \(c5.lastError)") }
+        else {
+            print("    \(fmt(c5.scanned)) neighbour pairs · \(c5.candidates) candidates · \(c5.grounded) share a rare term · \(c5.kept) kept")
+        }
+        s.checkpoint()
+        print("\n\(String(format: "%.0f", Date().timeIntervalSince(t0)))s. S1 segmentation, S2 summarization and S6 decay are not built yet.")
+        print("Run `exo brief` for the morning read-out.")
+    } else { print("needs macOS 26+") }
+
+case "connect":
+    let s = Store(dbPath); Connect.migrate(s)
+    var p = Connect.Params()
+    p.anchors = Int(opt("--anchors", "200")) ?? 200
+    p.sinceDays = Int(opt("--since", "0")) ?? 0
+    p.k = Int(opt("--k", "40")) ?? 40
+    p.minDays = Int(opt("--min-days", "30")) ?? 30
+    p.minSim = Double(opt("--min-sim", "")) ?? p.minSim
+    p.maxSim = Double(opt("--max-sim", "")) ?? p.maxSim
+    p.requireDifferentSource = flag("--cross-source-only")
+    p.dims = Int(opt("--dims", "0")) ?? 0
+    p.hubMax = Int(opt("--hub-max", "3")) ?? 3
+    p.perAnchor = Int(opt("--per-anchor", "1")) ?? 1
+    Connect.rarityCeiling = Int(opt("--rarity", "60")) ?? 60
+
+    if flag("--histogram") {
+        // Calibration before commitment. Area F quotes 0.85 and 0.55-0.80, but those bands
+        // were measured on a different embedding model, and §6 already found one place where
+        // a quoted band did not transfer. Look at this corpus first.
+        let t0 = Date()
+        let (c, scanned, hist) = Connect.candidates(s, p)
+        print("index width \(Connect.storedBits(s)) bits, scoring on \(p.dims > 0 ? String(p.dims) : "all") dims")
+        print("scanned \(fmt(scanned)) chunk-neighbour pairs from \(p.anchors) anchors in \(String(format: "%.1f", Date().timeIntervalSince(t0)))s")
+        print("post-filter candidates in [\(p.minSim), \(p.maxSim)]: \(c.count)\n")
+        print("int8 cosine distribution of everything that passed Δt≥\(p.minDays)d\(p.requireDifferentSource ? " + different-source" : ""):")
+        let total = max(1, hist.reduce(0, +))
+        for (i, n) in hist.enumerated() where n > 0 {
+            let lo = Double(i) * 0.1 - 1.0
+            let bar = String(repeating: "█", count: max(1, n * 46 / total))
+            print(String(format: "  %+.1f..%+.1f  %7d  %5.1f%%  %@", lo, lo + 0.1, n,
+                         Double(n) * 100 / Double(total), bar))
+        }
+        for c in c.prefix(12) {
+            print(String(format: "\n  %.3f  %dd  %@ / %@", c.sim, c.daysApart, c.srcA, c.srcB))
+            print("    A: \(c.textA.replacingOccurrences(of: "\n", with: " ").prefix(96))")
+            print("    B: \(c.textB.replacingOccurrences(of: "\n", with: " ").prefix(96))")
+        }
+        break
+    }
+
+    if #available(macOS 26.0, *) {
+        let t0 = Date()
+        let r = await Connect.run(s, p, judgeLimit: Int(opt("--judge", "40")) ?? 40,
+                                  verbose: flag("--verbose"))
+        s.checkpoint()
+        if r.judgeFailed {
+            print("on-device judging unavailable — \(r.failed) calls failed in a row:")
+            print("  \(r.lastError)")
+            print("  \(r.candidates) candidate(s) went unjudged. NOT a clean bill of health.")
+            break
+        }
+        print("""
+          \(fmt(r.scanned)) neighbour pairs scanned · \(r.candidates) survived the filters
+          \(r.grounded) share a rare term · \(r.ungrounded) share nothing specific
+          \(r.judged) described · \(r.failed) failed · \(r.kept) kept
+          \(String(format: "%.1f", Date().timeIntervalSince(t0)))s
+        """)
+    } else { print("needs macOS 26+") }
+
 case "contradictions":
     let s = Store(dbPath); Ledger.migrate(s)
     if flag("--scan") {
@@ -1000,6 +1130,102 @@ case "contra-resolve":
     case .ok(let note): s.checkpoint(); print("\(pos[1]): \(note)")
     case .failed(let why): print("not resolved — \(why)")
     }
+
+case "connect-test":
+    // Everything here is deterministic. The model's contribution to S5 is one sentence of
+    // prose about a term it was handed, and a test that pinned that would be testing this
+    // week's weights. What must not drift is which pairs are eligible, what counts as a
+    // grounded link, and that a connection cannot outlive the events it was drawn from.
+    let s = Store(dbPath); Connect.migrate(s)
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  ✅ \(label)"); pass += 1 }
+        else { print("  ❌ \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+
+    // ── automation detection ──
+    let padded = "New option: Acrylic Glass. Same deal — one free Photo Tile every month."
+        + String(repeating: "\u{200C} ", count: 6)
+    chk("ZWNJ padding is caught (and Character iteration would not see it)",
+        String(Connect.looksAutomated(padded)), "true")
+    let buried = "Do you know Hawk Junebug? Yes, connect: "
+        + String(repeating: "filler words to push the marker past six hundred characters. ", count: 14)
+        + "Unsubscribe here."
+    chk("a marker at char \(buried.count - 17) is still caught",
+        String(Connect.looksAutomated(buried)), "true")
+    chk("Cyrillic homoglyphs in Latin prose are caught",
+        String(Connect.looksAutomated("Нellο! Emily Сartеr here with Amazon's Remote Recruitment Team. Your experience caught our attention and we would like to discuss a role with you today.")),
+        "true")
+    chk("ordinary prose is not",
+        String(Connect.looksAutomated("The selector missed because the menu had already closed, so the aria-label had flipped back to Open menu before the click landed.")),
+        "false")
+
+    // ── the link has to be in both notes, and rare ──
+    var cache: [String: Int] = [:]
+    let noteA = "The selector missed because the menu had already closed — the aria-label flipped back to \"Open menu\" before the click landed."
+    let noteB = "My click opened the search panel instead, matching the first aria-label on the page rather than the one I wanted."
+    let shared = Connect.sharedRareTerms(s, noteA, noteB, cache: &cache)
+    chk("a genuinely shared rare identifier is found",
+        String(shared.contains { $0.0 == "aria-label" }), "true")
+    chk("…and hyphens survive tokenization, so it is one term not two",
+        String(Connect.sharedRareTerms(s, "aria-label", "aria-label", cache: &cache).first?.0 ?? "-"),
+        "aria-label")
+    let generic = Connect.sharedRareTerms(s,
+        "This is about the build and the work and the design of the project overall.",
+        "The work on the build continued and the design of the project changed.", cache: &cache)
+    chk("words two work logs share by being work logs are not a link",
+        String(generic.isEmpty), "true")
+
+    // ── the model is shown the term, not the top of the note ──
+    let long = String(repeating: "preamble that is not about anything in particular. ", count: 20)
+        + "then finally the webgpu backend refused to compile the shader."
+    chk("the prompt window centres on the term",
+        String(Connect.window(long, around: "webgpu", radius: 40).contains("webgpu")), "true")
+    chk("…and a term that is absent falls back to the head rather than crashing",
+        String(Connect.window(long, around: "nonexistent", radius: 40).isEmpty), "false")
+
+    // ── persistence, and the promise that a connection dies with its evidence ──
+    let marker = "connecttest"
+    func wipe() {
+        s.exec("DELETE FROM events WHERE source='\(marker)';")   // connections cascade
+    }
+    wipe()
+    let now = nowMicros()
+    for i in 0..<2 {
+        s.exec("""
+            INSERT INTO events(ts,ts_tz,source,source_kind,trust,retention,text,content_hash)
+            VALUES(\(now - Int64(i) * 60 * 86_400_000_000), 0, '\(marker)', 'own_file', 'self',
+                   'text', 'synthetic note \(i) about the webgpu backend', 'ct\(i)');
+            """)
+    }
+    let seqs = s.rows("SELECT seq FROM events WHERE source='\(marker)' ORDER BY seq;").compactMap { Int64($0[0]) }
+    guard seqs.count == 2 else { print("  ❌ fixture: expected 2 events, got \(seqs.count)"); break }
+    let cand = Connect.Cand(a: seqs[0], b: seqs[1], sim: 0.7, daysApart: 60,
+                            srcA: marker, srcB: marker, textA: "a", textB: "b",
+                            fullA: "a", fullB: "b", tsA: now, tsB: now - 60 * 86_400_000_000)
+    let finding = Connect.Finding(cand: cand, link: "webgpu — test", relevance: 1,
+                                  unexpectedness: 0.5, serendipity: 0.5)
+    Connect.record(s, finding)
+    Connect.record(s, finding)
+    chk("a re-run does not duplicate the connection",
+        String(s.scalar("SELECT count(*) FROM connection WHERE seq_a=\(seqs[0]) AND seq_b=\(seqs[1]);")), "1")
+
+    let brief1 = Connect.forBrief(s, limit: 10).filter { $0.srcA == marker }
+    chk("an unsurfaced connection reaches the brief", String(brief1.count), "1")
+    Connect.markSurfaced(s, brief1.map(\.id))
+    chk("and never reaches it twice",
+        String(Connect.forBrief(s, limit: 10).filter { $0.srcA == marker }.count), "0")
+
+    // Area F: "every derived artifact must carry provenance pointers back to source spans so
+    // deletion can cascade. Retrofit is impossible; build it in at S3." Retention deletes
+    // events; if the connections drawn from them survived, a purge would leave the brief
+    // quoting text that no longer exists.
+    s.exec("DELETE FROM events WHERE seq=\(seqs[0]);")
+    chk("deleting an event deletes the connections drawn from it",
+        String(s.scalar("SELECT count(*) FROM connection WHERE seq_a=\(seqs[0]) OR seq_b=\(seqs[0]);")), "0")
+
+    wipe(); s.checkpoint()
+    print("\n  \(pass) passed, \(fail) failed")
 
 case "contra-test":
     // Stages 1 and 4 are deterministic, so they are asserted rather than described. The
