@@ -1,8 +1,8 @@
 # exo — Exocortex capture fleet + retrieval + belief ledger + dream cycle
 
-**Phases 1–5.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
-bitemporal belief ledger → contradiction detection → connection discovery, with the retention
-policy and capture-exclusion list shipped *now* rather than later.
+**Phases 1–6.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
+bitemporal belief ledger → contradiction detection → connection discovery → episode segmentation
+and recall, with the retention policy and capture-exclusion list shipped *now* rather than later.
 
 **Measured results, including one that contradicts the research: [RESULTS.md](RESULTS.md).**
 
@@ -34,11 +34,14 @@ bash build/build.sh          # -> build/exo
 ./build/exo contradictions --scan           # detect; then review what needs a decision
 ./build/exo contra-resolve <id> genuine_change
 ./build/exo connect --histogram             # calibrate the band before trusting it
+./build/exo segment                         # cut the day into episodes, then summarize
+./build/exo day                             # yesterday, as episodes with citations
 ./build/exo dream                           # the nightly DAG: S4 + S5
 ./build/exo brief                           # the morning read-out (at most 3)
 ./build/exo ledger-test                     # 7/7   bitemporal invariants
 ./build/exo contra-test                     # 15/15 detection + resolution invariants
 ./build/exo connect-test                    # 13/13 eligibility, grounding, cascade
+./build/exo segment-test                    # 10/10 surprise, boundaries, citation cascade
 ```
 
 ## Backup
@@ -102,6 +105,25 @@ Two things the measurements decided, both in [RESULTS.md §6](RESULTS.md):
   contradiction. Asked in a *separate call* what question each statement answers, it writes the
   identical question twice — so the judgement is made in code instead. **P = 1.0, R = 0.5** on a
   small labelled set, which is the shape Area E asks for: *"false positives destroy it."*
+
+## Episodes — surprise against a centroid, not against the last thing
+
+`exo segment` cuts a day at moments of **prediction error** (Event Segmentation Theory, Zacks
+2007) and summarizes each stretch. Surprise is measured against a **running centroid of the
+recent past**, and that choice is load-bearing:
+
+| stream | max pairwise distance | surprise vs. centroid |
+|---|---:|---:|
+| two topics interleaved | **1.00** — cuts on every event | **< 0.60** — correctly one episode |
+| a genuine switch | 1.00 | **> 0.90** — correctly a boundary |
+
+"Is this different from the last thing?" and "is this different from what I have been doing?"
+are different questions, and only the second is prediction error.
+
+**Every summary line carries the `seq` it came from**, the citation column is `NOT NULL`, and a
+line citing an event outside its own episode is discarded rather than stored. On 2026-08-20:
+26 eligible events → 3 episodes → 21 cited lines, 0 dropped. Full numbers in
+[RESULTS.md §8](RESULTS.md).
 
 ## Connection discovery — what similarity actually finds
 
@@ -185,7 +207,8 @@ in Phase 1 and not Phase 6.
 
 ## Next
 
-S4, S5 and S8 of Area F's DAG are built and `exo dream` runs them. Still missing: **S1**
-segmentation by prediction error, **S2** hierarchical map-reduce summarization, and **S6** FSRS
-decay (`R = exp(ln(0.9)·t/S)`, demote to cold storage, never hard-delete). Then the daemons —
-Scout, Butler, Ledger, Historian, Editor.
+S1, S2, S4, S5 and S8 of Area F's DAG are built and `exo dream` runs them. Still missing: **S6**
+FSRS decay (`R = exp(ln(0.9)·t/S)`, demote to cold storage, never hard-delete; never decay
+commitments until discharged, contradictions until resolved, or anything pinned), and EM-LLM's
+graph-theoretic refinement of S1's boundaries. Then the daemons — Scout, Butler, Ledger,
+Historian, Editor.
