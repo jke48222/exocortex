@@ -1,7 +1,8 @@
-# exo — Exocortex capture fleet + retrieval
+# exo — Exocortex capture fleet + retrieval + belief ledger
 
-**Phases 1–2.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search,
-with the retention policy and capture-exclusion list shipped *now* rather than later.
+**Phases 1–4.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
+bitemporal belief ledger → contradiction detection, with the retention policy and
+capture-exclusion list shipped *now* rather than later.
 
 **Measured results, including one that contradicts the research: [RESULTS.md](RESULTS.md).**
 
@@ -26,6 +27,14 @@ bash build/build.sh          # -> build/exo
 ./build/exo fs --seconds 30                 # watch the home dir (resumable)
 ./build/exo bar                             # everything-bar: ⌥Space to toggle
 ./build/exo stats
+
+./build/exo tell "I hate driving at night"  # record a belief directly
+./build/exo ask --n 3                       # short interview; highest confidence tier
+./build/exo beliefs me --as-of 2025-06-01T00:00:00Z
+./build/exo contradictions --scan           # detect; then review what needs a decision
+./build/exo contra-resolve <id> genuine_change
+./build/exo ledger-test                     # 7/7   bitemporal invariants
+./build/exo contra-test                     # 15/15 detection + resolution invariants
 ```
 
 ## Backup
@@ -58,6 +67,37 @@ Every row carries provenance: `source · trust · app · time`, colour-coded by 
 
 **Trust is assigned by capture path — never by a model, never by a caller.** The vocabulary matches
 [`mcp-bus/CONTRACT.md`](../mcp-bus/CONTRACT.md) §1 exactly, so `min_trust` is enforceable end to end.
+
+## Contradiction detection — four verdicts, and three of them mean nothing is wrong
+
+The queue only ever contains things that need a decision. Everything else closes on detection.
+
+| verdict | what it means | what it does to the ledger |
+|---|---|---|
+| `genuine_change` | they answer the same question differently, and no situation makes both true | closes the earlier belief where the later one begins |
+| `scope_difference` | both true, in different named situations | **nothing** |
+| `both_true` | never actually conflicted | **nothing** |
+| `extraction_error` | the machine misread one of them | closes that row's *system* record, leaving its belief interval untouched |
+
+**The gate is the belief interval, and only a bitemporal ledger can offer it.** Believing P in
+2024 and not-P in 2026 is evolution, not a contradiction — there is nothing to review. A
+contradiction is the ledger asserting both *at the same moment*.
+
+Four stages, cheapest first: **overlapping-interval SQL** → **similarity band** (0.55–0.95, Qwen3
+int8@256) → **on-device four-way classification** → **`exo contra-resolve`**. Stages 1–3 fill a
+queue; only a person changes the ledger.
+
+Two things the measurements decided, both in [RESULTS.md §6](RESULTS.md):
+
+- **`NLEmbedding` cannot filter belief pairs at any threshold** — it puts real contradictions
+  *inside* the unrelated range. The retrieval stack's Qwen3 int8 tier separates with a 0.135
+  margin, and separates *better than full float*, while the binary tier at the same width is
+  unusable (0.007). Same vectors, opposite verdict from §2's retrieval eval.
+- **The model will not call anything a contradiction, but it will describe one accurately.**
+  Asked to judge, it returned `scope_difference` for 14 of 14 pairs including a head-on
+  contradiction. Asked in a *separate call* what question each statement answers, it writes the
+  identical question twice — so the judgement is made in code instead. **P = 1.0, R = 0.5** on a
+  small labelled set, which is the shape Area E asks for: *"false positives destroy it."*
 
 ## Retention — the FRCP 37(e) defense
 
@@ -100,9 +140,23 @@ in Phase 1 and not Phase 6.
 - Single `events.db`. The **split encrypted `content.db`** (SQLite3MultipleCiphers, ChaCha20-Poly1305,
   holding payloads + the FTS index) is Phase 2 — an FTS5 index over your text is a searchable
   concordance of your life and belongs on the encrypted side.
+- **Contradiction recall is about half.** The identity test catches a change of mind only when the
+  model frames both statements as the same question; reframed pairs ("I don't drink anymore" /
+  "I enjoy a glass of wine most evenings") score 0.556 and are missed. Closing that gap is what
+  Area E's DeBERTa NLI stage was for, and there is no NLI model on this machine.
+- **Timestamps are ISO8601 to the second.** Two beliefs recorded in the same second — every answer
+  in one `exo ask` sitting — tie, and `genuine_change` correctly refuses them: you cannot have
+  changed your mind between two things you wrote down simultaneously. The command says so and
+  names the verdicts that do apply.
+- **`availability` is not a guarantee.** The text sanitizer screening every on-device request can
+  fail system-wide (`SensitiveContentAnalysisML 15` → `ModelManagerError 1013`) while
+  `SystemLanguageModel.default.availability` still answers `.available`. `scan` and `extract` both
+  abort after 3 consecutive failures and say the run is **not** a clean bill of health. It cleared
+  on its own here; a restart reloads the sanitizer.
 
-## Next (Phase 1 remainder)
+## Next
 
-Browser history, iMessage (`imessage-exporter` as a **subprocess** — it's GPL-3.0 and cannot be linked
-into a notarized proprietary app), Gmail (**consent screen set to Production-unverified**, because
-Testing status expires refresh tokens every 7 days), and FSEvents with a persisted stream ID.
+The rest of the dream cycle (Area F): segmentation by prediction error, hierarchical map-reduce
+summarization, **S5 connection discovery** (two-stage ANN → LLM judging, at most 1–3 per morning),
+FSRS decay, and the morning brief. Then the daemons — Scout, Butler, Ledger, Historian, Editor.
+Contradiction detection is S4 of that DAG and is built; the DAG runner that schedules it is not.

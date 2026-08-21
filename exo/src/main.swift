@@ -707,6 +707,11 @@ case "extract":
                                   order: flag("--random") ? "RANDOM()" : "e.seq DESC")
         s.checkpoint()
         let dt = Date().timeIntervalSince(t0)
+        if !r.aborted.isEmpty {
+            print("on-device extraction stopped after \(r.failed) failures: \(r.aborted)")
+            print("  Nothing was extracted. This is NOT an empty corpus — retry later.")
+            break
+        }
         print("""
           scanned \(r.scanned) · \(r.claims) kept · \(r.dropped) dropped (volatile/not-mine) · \(r.empty) with none · \(r.failed) failed
           \(String(format: "%.1f", dt))s (\(String(format: "%.1f", dt / Double(max(r.scanned,1))))s/event)
@@ -778,11 +783,16 @@ case "ask":
         guard let a = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty else {
             print("    (skipped)\n"); continue
         }
+        // `scope` means the situation a belief holds IN. The interview question is
+        // provenance, not scope — filing it here made every elicited belief look like it
+        // held in a different situation, and `scope_difference` is one of the four
+        // contradiction verdicts, so the detector would have read the interview script as
+        // proof that nothing ever conflicts.
         let cid = Ledger.upsertClaim(s, subject: "me", predicate: "states", object: nil,
-                                     polarity: 1, scope: q, norm: a)
+                                     polarity: 1, scope: nil, norm: a)
         _ = Ledger.mindChange(s, from: nil, toClaim: cid, at: Ledger.now(),
                               confidence: 1.0, confidenceSrc: "explicit_statement",
-                              runID: run, evidence: [])
+                              runID: run, evidence: [], elicitedBy: q)
         recorded += 1
         print("    recorded\n")
     }
@@ -836,6 +846,18 @@ case "beliefs-reject":
 case "ledger-test":
     // The distinction the whole ledger exists to preserve, proven rather than asserted.
     let s = Store(dbPath); Ledger.migrate(s)
+    // Wipe at BOTH ends. Running with leftovers from the previous invocation is not a
+    // fresh fixture: the earlier run's rows satisfy the same point-in-time queries, and
+    // the suite starts grading the union of every run it has ever done.
+    func wipe() {
+        let mine = "SELECT belief_id FROM belief b JOIN claim c USING(claim_id) WHERE c.subject='ledgertest'"
+        s.exec("DELETE FROM contradiction WHERE belief_a IN (\(mine)) OR belief_b IN (\(mine));")
+        s.exec("DELETE FROM belief_vec WHERE belief_id IN (\(mine));")
+        s.exec("DELETE FROM belief_evidence WHERE belief_id IN (\(mine));")
+        s.exec("DELETE FROM belief WHERE claim_id IN (SELECT claim_id FROM claim WHERE subject='ledgertest');")
+        s.exec("DELETE FROM claim WHERE subject='ledgertest';")
+    }
+    wipe()
     let run = Ledger.startRun(s, model: "test", version: "1", promptHash: "-", codeVersion: "-")
     let P  = Ledger.upsertClaim(s, subject: "ledgertest", predicate: "ships_in",
                                 object: "March", polarity: 1, scope: nil,
@@ -848,8 +870,14 @@ case "ledger-test":
         if got == want { print("  ✅ \(label)"); pass += 1 }
         else { print("  ❌ \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
     }
+    // `includeUnconfirmed` on purpose. What is under test here is the TEMPORAL machinery —
+    // whether a re-extraction rewrites history and a change of mind does not. The review
+    // gate is a separate policy, and letting it filter the fixture made check B fail for a
+    // reason that had nothing to do with bitemporality: the re-extraction below is recorded
+    // as `model_selfreport`, exactly the tier `beliefs` hides. The gate gets its own check
+    // at the end instead of silently eating this one.
     func at(_ d: String) -> String {
-        Ledger.beliefsAt(s, subject: "ledgertest", asOf: d)
+        Ledger.beliefsAt(s, subject: "ledgertest", asOf: d, includeUnconfirmed: true)
             .map { ($0.polarity > 0 ? "P" : "notP") }.sorted().joined(separator: "+")
     }
 
@@ -886,6 +914,249 @@ case "ledger-test":
                                systemTime: "2020-01-01T00:00:00Z")
     chk("audit: before this run existed, nothing was known", String(old.count), "0")
 
+    // …and the review gate, stated as its own claim rather than left to interfere with
+    // the temporal checks above. That re-extraction was a model's guess, so `exo beliefs`
+    // must not show it as something I believe.
+    chk("gate: an unreviewed re-extraction is not a belief",
+        String(Ledger.beliefsAt(s, subject: "ledgertest", asOf: "2025-06-01T00:00:00Z").count), "0")
+
+    // Synthetic P / not-P pairs left in the real ledger are precisely what contradiction
+    // detection is built to find. Leaving them behind would have the suite manufacturing
+    // its own findings.
+    wipe(); s.checkpoint()
+
+    print("\n  \(pass) passed, \(fail) failed")
+
+case "contradictions":
+    let s = Store(dbPath); Ledger.migrate(s)
+    if flag("--scan") {
+        if #available(macOS 26.0, *) {
+            let t0 = Date()
+            let r = await Contradict.scan(s,
+                        includeUnconfirmed: flag("--include-unconfirmed"),
+                        limit: Int(opt("--limit", "2000")) ?? 2000,
+                        minSim: Double(opt("--min-sim", "")) ?? Contradict.minSim,
+                        maxSim: Double(opt("--max-sim", "")) ?? Contradict.maxSim,
+                        verbose: flag("--verbose"))
+            s.checkpoint()
+            if r.embedFailed {
+                print("embedding sidecar unavailable — cannot score candidates.")
+                print("  \(r.candidates) pair(s) went unjudged. This is NOT a clean bill of health.")
+                break
+            }
+            if r.judgeFailed {
+                print("on-device classification unavailable — \(r.failed) calls failed in a row:")
+                print("  \(r.lastError)")
+                print("  Usually the text sanitizer every request is screened by rather than the")
+                print("  language model: SensitiveContentAnalysisML 15 -> ModelManagerError 1013.")
+                print("  It latches system-wide and outlives the process, and `availability`")
+                print("  keeps reporting `.available` while it does. Nothing was judged —")
+                print("  this is NOT a clean bill of health. Retry later; if it persists,")
+                print("  restarting the machine reloads the sanitizer.")
+                break
+            }
+            print("""
+              \(r.candidates) overlapping pair(s) · \(r.filtered) unrelated · \(r.duplicates) near-duplicate
+              \(r.judged) judged · \(r.failed) failed · \(r.framingFailed) unframed · \(r.recorded) new · \(r.escalated) escalated
+              \(String(format: "%.1f", Date().timeIntervalSince(t0)))s
+            """)
+            let byVerdict = Dictionary(grouping: r.findings, by: { $0.verdict })
+                .mapValues(\.count).sorted { $0.key < $1.key }
+            if !byVerdict.isEmpty {
+                print("  verdicts: " + byVerdict.map { "\($0.key)=\($0.value)" }.joined(separator: " · "))
+            }
+        } else { print("needs macOS 26+") }
+    }
+    let open = Contradict.open(s, limit: Int(opt("--show", "20")) ?? 20)
+    if open.isEmpty {
+        print("\nnothing open. (scope_difference, both_true and extraction_error close on detection;")
+        print(" only genuine_change reaches this queue, because only it needs a decision.)")
+        break
+    }
+    print("\n\(open.count) open contradiction(s) — the ledger says you hold both at once:\n")
+    for o in open {
+        print("  \(o.id)   sim \(String(format: "%.2f", o.sim))")
+        print("    A (\(o.fromA.prefix(10)))  \(o.textA)")
+        print("    B (\(o.fromB.prefix(10)))  \(o.textB)")
+        if !o.reason.isEmpty { print("    → \(o.reason)") }
+        if !o.discriminator.isEmpty { print("    ⋯ separated by: \(o.discriminator)") }
+        print("")
+    }
+    print("""
+      exo contra-resolve <id> genuine_change              close the earlier belief where the later begins
+      exo contra-resolve <id> scope_difference            both stand; they hold in different situations
+      exo contra-resolve <id> both_true                   both stand; they never actually conflicted
+      exo contra-resolve <id> extraction_error --retract <belief_id>
+    """)
+
+case "contra-resolve":
+    let s = Store(dbPath); Ledger.migrate(s)
+    let pos = positional()
+    guard pos.count >= 2 else {
+        print("usage: exo contra-resolve <contra_id> <verdict> [--retract <belief_id>]"); break
+    }
+    let retracting = opt("--retract", "").isEmpty ? nil : opt("--retract", "")
+    switch Contradict.resolve(s, contraID: pos[0], verdict: pos[1], retracting: retracting) {
+    case .ok(let note): s.checkpoint(); print("\(pos[1]): \(note)")
+    case .failed(let why): print("not resolved — \(why)")
+    }
+
+case "contra-test":
+    // Stages 1 and 4 are deterministic, so they are asserted rather than described. The
+    // classifier is not: it is a model, and a test that pins its output would only be
+    // testing today's weights. What must never drift is which pairs are *offered* to it,
+    // and what a verdict does to the ledger afterwards.
+    let s = Store(dbPath); Ledger.migrate(s)
+    let SUBJ = "contratest"
+    // Beliefs and findings only. Claims are content-addressed and shared across cases —
+    // deleting them here orphaned every belief created afterwards, and the whole run went
+    // from a failed assertion to an index-out-of-range trap four checks in.
+    func reset() {
+        let mine = "SELECT belief_id FROM belief b JOIN claim c USING(claim_id) WHERE c.subject='\(SUBJ)'"
+        s.exec("DELETE FROM contradiction WHERE belief_a IN (\(mine));")
+        s.exec("DELETE FROM belief_vec WHERE belief_id IN (\(mine));")
+        s.exec("DELETE FROM belief_evidence WHERE belief_id IN (\(mine));")
+        s.exec("DELETE FROM belief WHERE claim_id IN (SELECT claim_id FROM claim WHERE subject='\(SUBJ)');")
+    }
+    func resetAll() { reset(); s.exec("DELETE FROM claim WHERE subject='\(SUBJ)';") }
+    resetAll()
+    let run = Ledger.startRun(s, model: "test", version: "1", promptHash: "-", codeVersion: "-")
+    let P = Ledger.upsertClaim(s, subject: SUBJ, predicate: "works_best", object: "alone",
+                               polarity: 1, scope: nil, norm: "I work best alone")
+    let nP = Ledger.upsertClaim(s, subject: SUBJ, predicate: "works_best", object: "alone",
+                                polarity: -1, scope: nil, norm: "I do not work best alone")
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  ✅ \(label)"); pass += 1 }
+        else { print("  ❌ \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+    func cands() -> [Contradict.Pair] {
+        Contradict.candidates(s, includeUnconfirmed: true, limit: 100)
+            .filter { $0.subjA == SUBJ && $0.subjB == SUBJ }
+    }
+    /// A missing candidate is a failed assertion, not a crash — subscripting the empty
+    /// array turned the first fixture bug into a trap that hid every check after it.
+    func onlyPair(_ where_: String) -> Contradict.Pair? {
+        let c = cands()
+        if c.count == 1 { return c[0] }
+        print("  ❌ \(where_): expected 1 candidate pair, got \(c.count)"); fail += 1
+        return nil
+    }
+    func at(_ d: String) -> String {
+        Ledger.beliefsAt(s, subject: SUBJ, asOf: d, includeUnconfirmed: true)
+            .map { $0.polarity > 0 ? "P" : "notP" }.sorted().joined(separator: "+")
+    }
+    func mk(_ claim: String, _ from: String) -> String {
+        Ledger.mindChange(s, from: nil, toClaim: claim, at: from,
+                          confidence: 0.9, confidenceSrc: "explicit_statement", runID: run)
+    }
+
+    // ── stage 1: which pairs are even offered ──
+    var b1 = mk(P, "2025-01-01T00:00:00Z")
+    var b2 = mk(nP, "2025-06-01T00:00:00Z")
+    chk("overlapping P / not-P is a candidate", String(cands().count), "1")
+    chk("…and it is flagged structural, not left to the embedding",
+        cands().first.map { String($0.structural) } ?? "-", "true")
+    chk("the ledger really does assert both at once", at("2025-09-01T00:00:00Z"), "P+notP")
+    print("     ^ that simultaneity IS the contradiction; the rest is deciding why")
+
+    // Non-overlap. Close b1 before b2 begins and drop the succession link, so the ONLY
+    // thing excluding this pair is the interval test.
+    s.exec("UPDATE belief SET belief_to='2025-06-01T00:00:00Z' WHERE belief_id='\(b1)';")
+    s.exec("UPDATE belief SET supersedes=NULL WHERE belief_id='\(b2)';")
+    chk("non-overlapping intervals are evolution, not contradiction", String(cands().count), "0")
+
+    // ── stage 4: what a verdict does to the ledger ──
+    reset()
+    b1 = mk(P, "2025-01-01T00:00:00Z"); b2 = mk(nP, "2025-06-01T00:00:00Z")
+    guard let pairA = onlyPair("genuine_change setup") else { break }
+    Contradict.record(s, Contradict.Finding(pair: pairA, verdict: "genuine_change",
+                                            reason: "-", discriminator: ""), detector: "test")
+    Contradict.record(s, Contradict.Finding(pair: pairA, verdict: "genuine_change",
+                                            reason: "-", discriminator: ""), detector: "test")
+    chk("a re-scan does not duplicate the finding",
+        String(s.scalar("SELECT count(*) FROM contradiction WHERE belief_a='\(pairA.a)' AND belief_b='\(pairA.b)';")), "1")
+    let cid = s.rows("SELECT contra_id FROM contradiction WHERE belief_a='\(pairA.a)';")[0][0]
+
+    if case .failed(let why) = Contradict.resolve(s, contraID: cid, verdict: "genuine_change", retracting: nil) {
+        print("  ❌ genuine_change: \(why)"); fail += 1
+    } else {
+        chk("genuine_change: after the boundary, only the later belief", at("2025-09-01T00:00:00Z"), "notP")
+        chk("genuine_change: BEFORE it, the earlier belief still answers", at("2025-03-01T00:00:00Z"), "P")
+        print("     ^ I really did believe P in March; resolving a contradiction must not erase that")
+    }
+    chk("a resolved pair is never offered again", String(cands().count), "0")
+
+    // Two beliefs recorded in the SAME SECOND. Found by a live fixture, not by the checks
+    // above: eight `exo tell`s in a shell loop all landed on one ISO timestamp, and
+    // `genuine_change` then failed with "intervals may not overlap" — which was both wrong
+    // (they overlap completely; that is why it was flagged) and unactionable.
+    reset()
+    let tie = "2025-04-01T12:00:00Z"
+    _ = mk(P, tie); _ = mk(nP, tie)
+    if let pairT = onlyPair("same-instant setup") {
+        Contradict.record(s, Contradict.Finding(pair: pairT, verdict: "genuine_change",
+                                                reason: "-", discriminator: ""), detector: "test")
+        let cidT = s.rows("SELECT contra_id FROM contradiction WHERE belief_a='\(pairT.a)';")[0][0]
+        if case .failed(let why) = Contradict.resolve(s, contraID: cidT, verdict: "genuine_change",
+                                                      retracting: nil) {
+            chk("same-instant beliefs: refused, and the reason names the tie",
+                String(why.contains("same instant")), "true")
+        } else {
+            print("  ❌ same-instant beliefs: resolved when it should have refused"); fail += 1
+        }
+        chk("same-instant beliefs: nothing was changed", at("2025-09-01T00:00:00Z"), "P+notP")
+    }
+
+    // extraction_error — the machine misread one side; it was never believed at all.
+    reset()
+    b1 = mk(P, "2025-01-01T00:00:00Z"); b2 = mk(nP, "2025-06-01T00:00:00Z")
+    guard let pairB = onlyPair("extraction_error setup") else { break }
+    Contradict.record(s, Contradict.Finding(pair: pairB, verdict: "genuine_change",
+                                            reason: "-", discriminator: ""), detector: "test")
+    let cid2 = s.rows("SELECT contra_id FROM contradiction WHERE belief_a='\(pairB.a)';")[0][0]
+    _ = Contradict.resolve(s, contraID: cid2, verdict: "extraction_error", retracting: b2)
+    chk("extraction_error: the retracted side stops answering", at("2025-09-01T00:00:00Z"), "P")
+    chk("extraction_error: the row is closed, not deleted",
+        String(s.scalar("SELECT count(*) FROM belief WHERE belief_id='\(b2)' AND sys_to IS NOT NULL;")), "1")
+    chk("extraction_error: the belief INTERVAL is untouched",
+        s.rows("SELECT belief_from, coalesce(belief_to,'-') FROM belief WHERE belief_id='\(b2)';")
+            .first.map { "\($0[0])|\($0[1])" } ?? "", "2025-06-01T00:00:00Z|-")
+    print("     ^ a retraction moves the SYSTEM record. It does not claim I stopped believing it —")
+    print("       it claims I never did, and the audit trail has to survive saying so")
+
+    // both_true — the detector was over-eager. Nothing may change.
+    reset()
+    b1 = mk(P, "2025-01-01T00:00:00Z"); b2 = mk(nP, "2025-06-01T00:00:00Z")
+    guard let pairC = onlyPair("both_true setup") else { break }
+    Contradict.record(s, Contradict.Finding(pair: pairC, verdict: "genuine_change",
+                                            reason: "-", discriminator: ""), detector: "test")
+    let cid3 = s.rows("SELECT contra_id FROM contradiction WHERE belief_a='\(pairC.a)';")[0][0]
+    _ = Contradict.resolve(s, contraID: cid3, verdict: "both_true", retracting: nil)
+    chk("both_true: both beliefs still stand", at("2025-09-01T00:00:00Z"), "P+notP")
+    print("     ^ three of the four verdicts must leave the ledger alone, or the review")
+    print("       queue is a deletion queue wearing a disguise")
+
+    // ── stage 2, only if the sidecar is present ──
+    reset()
+    let U1 = Ledger.upsertClaim(s, subject: SUBJ, predicate: "states", object: nil, polarity: 1,
+                                scope: nil, norm: "I hate driving at night")
+    let U2 = Ledger.upsertClaim(s, subject: SUBJ, predicate: "states", object: nil, polarity: 1,
+                                scope: nil, norm: "I think loyalty matters more than talent")
+    _ = mk(U1, "2025-01-01T00:00:00Z"); _ = mk(U2, "2025-02-01T00:00:00Z")
+    let bandPairs = cands()
+    if bandPairs.count != 1 {
+        print("  ❌ band: expected 1 candidate pair, got \(bandPairs.count)"); fail += 1
+    } else if let scored = Contradict.score(s, bandPairs), let only = scored.first {
+        chk("band: two unrelated beliefs score below \(Contradict.minSim) (got \(String(format: "%.3f", only.sim)))",
+            String(only.sim < Contradict.minSim), "true")
+    } else {
+        // Distinguished from "no candidates" on purpose: a filter that fails closed and
+        // reports nothing looks exactly like a clean ledger.
+        print("  ⏭  band: embedding sidecar unavailable, stage 2 not exercised")
+    }
+
+    resetAll(); s.checkpoint()
     print("\n  \(pass) passed, \(fail) failed")
 
 case "stats":
