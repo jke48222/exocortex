@@ -934,6 +934,68 @@ case "ledger-test":
 
     print("\n  \(pass) passed, \(fail) failed")
 
+case "commitments":
+    let s = Store(dbPath); Promise.migrate(s)
+    if flag("--eval") {
+        if #available(macOS 26.0, *) {
+            let e = await Promise.evaluate(verbose: true)
+            print("""
+
+              \(e.tp) true positive · \(e.fp) false positive · \(e.fn) missed · \(e.tn) correctly ignored
+              precision \(String(format: "%.2f", e.precision)) · recall \(String(format: "%.2f", e.recall))
+              Area F's target for this daemon: P around 0.9 even at R = 0.5.
+            """)
+        } else { print("needs macOS 26+") }
+        break
+    }
+    if flag("--scan") {
+        if #available(macOS 26.0, *) {
+            let t0 = Date()
+            let r = await Promise.run(s, limit: Int(opt("--limit", "60")) ?? 60,
+                                      days: Int(opt("--days", "365")) ?? 365,
+                                      verbose: flag("--verbose"))
+            s.checkpoint()
+            if r.judgeFailed {
+                print("on-device detection unavailable — \(r.failed) failures in a row:")
+                print("  \(r.lastError)\n  Nothing was scanned. NOT a clean bill of health.")
+                break
+            }
+            print("""
+              \(r.scanned) scanned · \(r.detected) called a commitment · \(r.stored) survived the checks
+              rejected: \(r.rejectedQuote) not verbatim · \(r.rejectedCommissive) no commissive · \(r.rejectedDirection) someone else's promise
+              \(String(format: "%.1f", Date().timeIntervalSince(t0)))s
+            """)
+        } else { print("needs macOS 26+") }
+    }
+    let mine = Promise.open(s, limit: 20, direction: "mine")
+    let theirs = Promise.open(s, limit: 20, direction: "theirs")
+    if mine.isEmpty && theirs.isEmpty { print("\nnothing outstanding in either direction"); break }
+    // Both directions, and mine first. Area F's Butler note is that a briefing has to lead
+    // with unresolved commitments in both directions — what you owe is the part people
+    // actually forget, and a tracker that only shows what you are owed is a grievance list.
+    if !mine.isEmpty {
+        print("\n  you owe")
+        for c in mine {
+            print("    \(c.action)\(c.due.isEmpty ? "" : " (\(c.due))") — \(c.ageDays)d ago\(c.who.isEmpty ? "" : ", \(c.who)")")
+            print("      \"\(c.quote.prefix(90))\"   \(c.id)")
+        }
+    }
+    if !theirs.isEmpty {
+        print("\n  you are owed")
+        for c in theirs {
+            print("    \(c.action)\(c.due.isEmpty ? "" : " (\(c.due))") — \(c.ageDays)d ago\(c.who.isEmpty ? "" : ", \(c.who)")")
+            print("      \"\(c.quote.prefix(90))\"   \(c.id)")
+        }
+    }
+    print("\n  exo commit-done <id>     discharged\n  exo commit-drop <id>     never going to happen")
+
+case "commit-done", "commit-drop":
+    let s = Store(dbPath); Promise.migrate(s)
+    guard let id = positional().first else { print("usage: exo \(cmd) <commit_id>"); break }
+    let status = cmd == "commit-done" ? "discharged" : "dropped"
+    if Promise.resolve(s, id: id, status: status) { s.checkpoint(); print("\(status): \(id)") }
+    else { print("no open commitment \(id)") }
+
 case "decay":
     // S6. `--apply` is required to change anything; the default is a dry run, exactly like
     // `exo retention`. The two are deliberately separate commands: retention DELETES on a
@@ -952,7 +1014,7 @@ case "decay":
     }
     print("""
 
-      \(fmt(dr.considered)) considered · \(fmt(dr.immune)) immune (pinned, confirmed-belief evidence, open contradictions)
+      \(fmt(dr.considered)) considered · \(fmt(dr.immune)) immune (pinned, open commitments, confirmed-belief evidence, open contradictions)
       \(fmt(dr.demoted)) to demote · \(fmt(dr.revived)) to revive\(flag("--apply") ? " — APPLIED" : "  (dry run; --apply to write)")
     """)
     if !dr.examples.isEmpty {
@@ -1051,7 +1113,9 @@ case "brief":
     // nothing, in one line.
     let s = Store(dbPath); Connect.migrate(s); Ledger.migrate(s)
     let n = Int(opt("--n", "3")) ?? 3
-    Segment.migrate(s)
+    Segment.migrate(s); Promise.migrate(s)
+    let owed = Promise.open(s, limit: 3, direction: "mine")
+    let owedToMe = Promise.open(s, limit: 2, direction: "theirs")
     let conns = Connect.forBrief(s, limit: n)
     let open = Contradict.open(s, limit: 3)
     let lastDay = s.rows("SELECT max(day) FROM episode;").first?.first ?? ""
@@ -1059,6 +1123,15 @@ case "brief":
     let f = DateFormatter(); f.dateFormat = "EEEE d MMMM"
     print("\n\(f.string(from: Date()))\n")
 
+    // Unresolved commitments lead, in both directions. Area F's Butler note is explicit
+    // that a briefing opens with these rather than with a summary, because "you promised her
+    // the doc three weeks ago and never sent it" is the thing a briefing exists to say.
+    if !owed.isEmpty || !owedToMe.isEmpty {
+        print("  Still open")
+        for c in owed { print("    you owe · \(c.action)\(c.due.isEmpty ? "" : " (\(c.due))") — \(c.ageDays)d ago") }
+        for c in owedToMe { print("    owed to you · \(c.action)\(c.due.isEmpty ? "" : " (\(c.due))") — \(c.ageDays)d ago") }
+        print("")
+    }
     if !eps.isEmpty {
         print("  \(lastDay)")
         for e in eps {
@@ -1072,7 +1145,7 @@ case "brief":
         print("")
     }
 
-    if conns.isEmpty && open.isEmpty && eps.isEmpty {
+    if conns.isEmpty && open.isEmpty && eps.isEmpty && owed.isEmpty && owedToMe.isEmpty {
         print("  Nothing worth your attention. (Some weeks have no story.)\n")
         break
     }
@@ -1122,6 +1195,12 @@ case "dream":
             Segment.persist(s, sr.built, day: sr.day)
             print("    \(sr.day): \(sr.events) events → \(sr.episodes) episodes · \(sr.lines) cited lines · \(sr.uncited) uncited dropped")
         }
+
+        print("Ledger  commitments")
+        let pr = await Promise.run(s, limit: Int(opt("--commit-limit", "40")) ?? 40,
+                                   days: Int(opt("--commit-days", "14")) ?? 14, verbose: false)
+        if pr.judgeFailed { print("    unavailable: \(pr.lastError)") }
+        else { print("    \(pr.scanned) scanned · \(pr.detected) proposed · \(pr.stored) survived the checks") }
 
         print("S4  contradictions")
         let c4 = await Contradict.scan(s, includeUnconfirmed: false,
@@ -1277,6 +1356,60 @@ case "contra-resolve":
     case .ok(let note): s.checkpoint(); print("\(pos[1]): \(note)")
     case .failed(let why): print("not resolved — \(why)")
     }
+
+case "promise-test":
+    let s = Store(dbPath); Promise.migrate(s)
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  \u{2705} \(label)"); pass += 1 }
+        else { print("  \u{274C} \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+
+    // The commissive gate. Every negative here contains commitment-shaped words and none of
+    // them is a promise, which is precisely why a keyword filter alone cannot do this job.
+    chk("a plain promise is commissive", String(Promise.hasCommissive("I'll send it Tuesday")), "true")
+    chk("a curly apostrophe is the same word",
+        String(Promise.hasCommissive("I\u{2019}ll send it Tuesday")), "true")
+    chk("gratitude is not a promise", String(Promise.hasCommissive("that sounds great, thank you")), "false")
+    chk("a question is not a promise", String(Promise.hasCommissive("can you send it over?")), "false")
+
+    // Persistence, dedup, and the two resolutions.
+    let marker = "promisetest"
+    s.exec("DELETE FROM events WHERE source='\(marker)';")
+    let now = nowMicros()
+    s.exec("""
+        INSERT INTO events(ts,ts_tz,source,source_kind,trust,retention,text,content_hash,ingested_at)
+        VALUES(\(now), 0, '\(marker)', 'own_file', 'self', 'text',
+               'sure thing, I will review it today and send notes', 'pt0', \(now));
+        """)
+    guard let seq = s.rows("SELECT seq FROM events WHERE source='\(marker)';").first.flatMap({ Int64($0[0]) })
+    else { print("  \u{274C} fixture missing"); break }
+    func put(_ quote: String) {
+        Promise.store(s, seq: seq, direction: "mine", counterparty: "someone",
+                      quote: quote, action: "review it", due: nil, ts: now)
+    }
+    put("I will review it today"); put("I will review it today")
+    chk("the same promise is not stored twice",
+        String(s.scalar("SELECT count(*) FROM commitment WHERE seq=\(seq);")), "1")
+
+    let cid = s.rows("SELECT commit_id FROM commitment WHERE seq=\(seq);")[0][0]
+    chk("an open commitment is immune from decay",
+        String(s.rows(Decay.immuneSQL).compactMap { Int64($0[0]) }.contains(seq)), "true")
+    print("     ^ a promise you have not kept is the last thing that should quietly go cold")
+
+    chk("discharging it works", String(Promise.resolve(s, id: cid, status: "discharged")), "true")
+    chk("discharging it twice does not", String(Promise.resolve(s, id: cid, status: "discharged")), "false")
+    chk("and it leaves the open list", String(Promise.open(s, limit: 10).contains { $0.id == cid }), "false")
+    chk("a discharged commitment is no longer immune",
+        String(s.rows(Decay.immuneSQL).compactMap { Int64($0[0]) }.contains(seq)), "false")
+
+    s.exec("DELETE FROM events WHERE seq=\(seq);")
+    chk("deleting the message deletes the commitment drawn from it",
+        String(s.scalar("SELECT count(*) FROM commitment WHERE seq=\(seq);")), "0")
+
+    s.exec("DELETE FROM events WHERE source='\(marker)';")
+    s.checkpoint()
+    print("\n  \(pass) passed, \(fail) failed")
 
 case "decay-test":
     let s = Store(dbPath); Decay.migrate(s); Ledger.migrate(s)
