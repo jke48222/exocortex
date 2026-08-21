@@ -135,7 +135,11 @@ enum Extract {
         }
     }
 
-    struct Result { var scanned = 0, claims = 0, empty = 0, failed = 0, dropped = 0 }
+    struct Result {
+        var scanned = 0, claims = 0, empty = 0, failed = 0, dropped = 0
+        /// Non-empty when the run gave up early because the model stopped answering.
+        var aborted = ""
+    }
 
     @available(macOS 26.0, *)
     static func run(_ s: Store, limit: Int, verbose: Bool,
@@ -199,7 +203,16 @@ enum Extract {
                 }
             } catch {
                 out.failed += 1
-                if verbose { print("    [\(seq)] failed: \(String(describing: error).prefix(80))") }
+                if verbose { print("    [\(seq)] failed: \((error as NSError).localizedDescription)") }
+                // The sanitizer that screens every `respond` can die system-wide
+                // (SensitiveContentAnalysisML 15 -> ModelManagerError 1013) while
+                // `availability` above still answers `.available`. Every call then fails in
+                // 0.0s, and a run of 500 events would report "0 kept" — which looks exactly
+                // like a corpus with nothing in it. Stop and let the caller see the error.
+                if out.claims == 0 && out.empty == 0 && out.failed >= 3 {
+                    out.aborted = (error as NSError).localizedDescription
+                    break
+                }
             }
         }
 #endif

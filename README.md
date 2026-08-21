@@ -10,7 +10,7 @@ Research: [`portfolio-research/PASS-4-exocortex-crossportfolio-research.md`](../
 
 | Component | Status | Headline |
 |---|---|---|
-| **[`exo/`](exo/)** — Phase 1: capture fleet → SQLite/FTS5 → search | ✅ built, **7/7 tests** | 3 sources incl. Claude Code transcripts (zero permissions, 885 events in 1.2s), trust ladder, scheduled retention + litigation hold, capture-exclusion at the source |
+| **[`exo/`](exo/)** — Phases 1–4: capture fleet → SQLite/FTS5 + vectors → belief ledger → contradictions | ✅ built, **7/7 + 15/15 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, four-way contradiction detection |
 | **[`mcp-bus/`](mcp-bus/)** — the memory contract | ✅ **v1.0.0 FROZEN** | 9 tools, 4 trust tiers; invariants proven by smoke tests |
 
 ## exo — Phase 1
@@ -53,6 +53,8 @@ harness built, cross-client run pending).
 
 ## Next
 
-Phase 1: the full capture fleet (browser, iMessage, Gmail, Claude Code JSONL), the split encrypted
-store, and **the retention policy — which ships in Phase 1, not later, because a policy added after a
-dispute is spoliation.**
+**Phase 5 — the rest of the dream cycle.** Contradiction detection is S4 of Area F's nightly DAG and
+is built; what remains is S1 segmentation by prediction error, S2 hierarchical map-reduce
+summarization, **S5 connection discovery** (ANN candidates → LLM judging, *at most 1–3 surfaced per
+morning — one false connection destroys trust in all of them*), S6 FSRS decay, and S8 the morning
+brief. Then the five daemons: Scout, Butler, Ledger, Historian, Editor.
