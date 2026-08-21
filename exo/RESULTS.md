@@ -318,3 +318,141 @@ pad N texts and run a single batched forward pass — a contained change to `emb
 and the next thing to do here. Until then, semantic search is limited to whatever subset has
 been embedded; **FTS5/BM25 works across the whole corpus regardless**, which is what the
 everything-bar uses.
+
+---
+
+## 6. Contradiction detection — the filter the research specified does not exist here
+
+PASS-4 Area E's pipeline is *SQL candidates → **DeBERTa NLI filter** → LLM four-way
+classification → human confirmation*. There is no DeBERTa on this machine, and the substitute
+question — can an embedding stand in for an entailment model? — has a clean answer.
+
+### 6.1 `NLEmbedding` cannot filter belief pairs, at any threshold
+
+The obvious substitute ships with the OS and is already linked. Cosine similarity on labelled
+pairs:
+
+| pair type | `NLEmbedding` (512d) | Qwen3 float (1024d) | **Qwen3 int8 (256d)** | Qwen3 binary (256d) |
+|---|---:|---:|---:|---:|
+| contradictory, same topic | −0.13 … 0.13 | 0.62 … 0.69 | **0.69 … 0.75** | 0.47 … 0.52 |
+| same topic, different scope | 0.01 | 0.57 | **0.60** | 0.40 |
+| near-duplicate | 0.24 … 0.57 | 0.98 | **0.98** | 0.91 |
+| unrelated | −0.26 … −0.19 | 0.40 … 0.48 | **0.43 … 0.46** | 0.16 … 0.39 |
+| **margin (lowest keep − highest drop)** | **none** | 0.090 | **0.135** | 0.007 |
+
+**`NLEmbedding` places real contradictions inside the unrelated range.** No threshold separates
+them, so it is not a matter of tuning. This is the same provider Area D called *"a trap"*, and
+§2 above already found it fails the paraphrase test — this is the second independent failure.
+
+**The surprise is the int8 column.** The rescore tier built for retrieval separates *better than
+full float* — 0.135 vs 0.090 — because truncating 1024 dims to 256 drops dimensions that add
+noise on single sentences. The **binary** tier at the same width is unusable here (0.007 margin;
+it collapses the scope case onto unrelated), even though §2's controlled eval shows binary+rescore
+at 0.85–0.95 Recall@1 for *retrieval*. **Same vectors, same widths, opposite verdict — the
+quantization that is right for ranking documents is wrong for comparing two sentences.**
+
+Band shipped: **0.55 ≤ cos ≤ 0.95** on int8@256. Below is unrelated; above is a near-duplicate,
+which is not a disagreement.
+
+### 6.2 The on-device model will not call anything a contradiction
+
+Fixture: 8 elicited beliefs → 28 interval-overlapping pairs → 14 survive the band. One pair is a
+head-on contradiction by construction (*"I work best completely alone with nobody else around"* /
+*"I do my best work surrounded by other people in a room"*).
+
+| prompt | genuine_change | scope_difference | head-on pair found? |
+|---|---:|---:|---|
+| four-way, one free-text discriminator | 0 | 14 | **no** — `discriminator: "work environment"` |
+| four-way, discriminator split into situation A and situation B | 0 | 14 | **no** — `A: "working alone" / B: "working with others"` |
+| **framing call separated from judging call, + question identity** | **1** | 13 | **yes** |
+
+Two failure modes, and the second is the interesting one:
+
+1. Given one free-text field for "what separates these", the model writes **the topic the two
+   statements share** — "work environment" — and calls that a scope. 
+2. Forced to name situation A and situation B separately, it restates **each statement as its own
+   situation**. That is a tautology available for any pair whatsoever, so it never runs out.
+
+No wording fixed either. What worked was to stop asking the model to judge and ask it to
+*describe*: for each statement alone, what question about the person does it answer? On the
+head-on pair it writes **the identical sentence twice** — *"What is the best environment for the
+person to work in"* — and then, asked separately, still rules the two compatible. **The
+decomposition is sound; only the judgement is broken**, so the judgement is done in code:
+two statements answering the same question with different answers contradict by definition.
+
+### 6.3 The judgement contaminates the description if one call does both
+
+Folding `questionA`/`questionB` into the four-way schema looked free. It is not:
+
+| how the questions were asked | question similarity on the head-on pair |
+|---|---:|
+| inside the four-way prompt | 0.830 — below threshold, test never fires |
+| **its own call, describe-only instructions** | **1.000** |
+
+Asked alongside the verdict, the model writes questions that already contain the verdict
+("…when working with others"). **Describing has to be the model's only job for the description to
+be worth anything.**
+
+### 6.4 What the identity test buys, stated as precision and recall
+
+Question similarity on a labelled set:
+
+| labelled | question similarity |
+|---|---:|
+| changed mind, same question | **1.000** ← caught |
+| changed mind, reframed (*"I don't drink anymore"* / *"I enjoy a glass of wine most evenings"*) | 0.556 ← **missed** |
+| genuine scope difference | 0.746, 0.829 |
+| unrelated | 0.583, 0.789 |
+
+Only identity separates, and it separates by a mile — 1.000 against a next-highest of 0.829.
+Everything below overlaps and keeps the model's own verdict. Threshold 0.95.
+
+**P = 1.0, R = 0.5** on this set: on the 8-belief fixture it surfaced exactly one pair, the right
+one, with no false positives. That is deliberately the shape Area E asks for — *"false positives
+destroy it — tune to P ≈ 0.9 even at R = 0.5"* — and half of real contradictions go unfound.
+**The missing half is what the DeBERTa NLI stage would buy.** The labelled set is 6 pairs; these
+are direction-of-effect numbers, not a benchmark.
+
+On the **real ledger** (3 confirmed beliefs, 3 pairs): 2 unrelated, 1 near-duplicate, **0
+contradictions** — correct, and the near-duplicate is a genuine finding (two `exo tell` records of
+the same belief about wanting a digital brain).
+
+### 6.5 Two bugs the fixture found in shipped code
+
+- **`claim_id` did not include the claim's text.** The content address hashed
+  `(subject, predicate, object, polarity, scope)` — and elicitation writes every answer as
+  `(me, states, NULL, +1, NULL)`. Every belief ever recorded by `exo tell` or `exo ask` therefore
+  hashed to **one row**, and `INSERT OR IGNORE` kept the first text, so later beliefs silently
+  pointed at the wrong sentence. Masked until now only because `exo ask` was filing the interview
+  question in `scope`, which happened to make the hashes differ. Fixing that (below) would have
+  triggered it immediately.
+- **`exo ask` wrote the interview question into `claim.scope`.** Scope means the situation a
+  belief holds *in*, and `scope_difference` is one of the four verdicts — so the detector would
+  have read the interview script as evidence that nothing ever conflicts. The question now lives
+  in `belief.elicited_by`.
+
+`ledger-test` was also found red (6 checks, 1 failing) and had been since the review gate landed:
+it asserts a re-extraction rewrites history, but records that re-extraction as `model_selfreport`,
+which `exo beliefs` deliberately hides. Both suites now wipe their fixtures at **both** ends —
+synthetic P / not-P pairs left in the real ledger are exactly what this feature is built to find.
+
+### 6.6 `availability` lies, and the failure is silent
+
+Sustained use put the machine into a state where **every** `respond()` failed instantly:
+
+```
+SensitiveContentAnalysisML error 15
+  → CombinedTextSanitizerBackend.BackendError 1
+    → ModelManagerServices.ModelManagerError 1013
+```
+
+That is the text sanitizer every request is screened by, not the language model. It latches
+**system-wide** — a freshly built binary hit it on its first call, in 0.0 s — and
+`SystemLanguageModel.default.availability` answers `.available` throughout, so the guard at the
+top of the function cannot see it.
+
+Left alone, a scan spent **333 s** failing 14 times and printed `0 judged`, which reads exactly
+like a quiet ledger. Both `scan` and `extract` now abort after 3 consecutive failures with the
+error text, in ~4 s, and say in as many words that this is **not** a clean bill of health. A stage
+that fails closed and stays quiet is indistinguishable from a clean ledger, which is the one lie
+this feature cannot afford to tell.
