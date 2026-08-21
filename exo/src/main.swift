@@ -927,6 +927,74 @@ case "ledger-test":
 
     print("\n  \(pass) passed, \(fail) failed")
 
+case "segment":
+    let s = Store(dbPath); Segment.migrate(s)
+    var p = Segment.Params()
+    p.day = opt("--day", "")
+    p.window = Int(opt("--window", "5")) ?? 5
+    p.k = Double(opt("--k", "")) ?? 1.0
+    p.gapMinutes = Int(opt("--gap", "45")) ?? 45
+    p.minEvents = Int(opt("--min-events", "3")) ?? 3
+    let sources = "'claudecode','gmail','imessage','imap','iphone.note'"
+
+    if flag("--histogram") {
+        // Same discipline as the connection band: look at this corpus before picking a
+        // threshold. Surprise scales differ between a day of one long build and a day of
+        // scattered errands, which is why the cut is mean + k·sd rather than a constant.
+        let day = p.day.isEmpty
+            ? (s.rows("SELECT date(max(ts)/1000000,'unixepoch','localtime') FROM events WHERE ts < \(Connect.tsCeil);").first?.first ?? "")
+            : p.day
+        let its = Segment.items(s, day: day, sources: sources)
+        guard its.count > 1 else { print("no vectorized eligible events on \(day)"); break }
+        let (cuts, sur, threshold) = Segment.boundaries(its, p)
+        print("\(day): \(its.count) eligible vectorized events · threshold \(String(format: "%.3f", threshold)) · \(cuts.count) episodes\n")
+        var hist = [Int](repeating: 0, count: 12)
+        for v in sur.dropFirst() { hist[min(11, max(0, Int(v * 20)))] += 1 }
+        let total = max(1, hist.reduce(0, +))
+        for (i, n) in hist.enumerated() where n > 0 {
+            print(String(format: "  %.2f..%.2f  %5d  %@", Double(i) * 0.05, Double(i) * 0.05 + 0.05, n,
+                         String(repeating: "█", count: max(1, n * 40 / total))))
+        }
+        print("")
+        for (n, c) in cuts.enumerated() {
+            let end = n + 1 < cuts.count ? cuts[n + 1] : its.count
+            print(String(format: "  %@  %2d events  surprise %.3f  %@", stamp(its[c].ts), end - c,
+                         sur[c], its[c].text.replacingOccurrences(of: "\n", with: " ").prefix(74).description))
+        }
+        break
+    }
+
+    if #available(macOS 26.0, *) {
+        let t0 = Date()
+        let r = await Segment.run(s, p, sources: sources, summarize: !flag("--no-summary"),
+                                  verbose: flag("--verbose"))
+        if r.judgeFailed {
+            print("on-device summarization unavailable — \(r.failed) failures in a row:")
+            print("  \(r.lastError)\n  Episodes were still cut. NOT a complete run.")
+            Segment.persist(s, r.built, day: r.day); s.checkpoint(); break
+        }
+        Segment.persist(s, r.built, day: r.day); s.checkpoint()
+        print("""
+          \(r.day): \(r.events) events → \(r.episodes) episodes (threshold \(String(format: "%.3f", r.threshold)))
+          \(r.summarized) summarized · \(r.failed) failed · \(r.lines) cited lines · \(r.uncited) dropped for citing outside the episode
+          \(String(format: "%.1f", Date().timeIntervalSince(t0)))s
+        """)
+    } else { print("needs macOS 26+") }
+
+case "day":
+    let s = Store(dbPath); Segment.migrate(s)
+    let day = opt("--day", "").isEmpty
+        ? (s.rows("SELECT max(day) FROM episode;").first?.first ?? "")
+        : opt("--day", "")
+    let eps = Segment.forDay(s, day: day)
+    if eps.isEmpty { print("no episodes for \(day.isEmpty ? "any day" : day) — run `exo segment`"); break }
+    print("\n\(day)\n")
+    for e in eps {
+        print("  \(stamp(e.from).suffix(5))–\(stamp(e.to).suffix(5))  \(e.title.isEmpty ? "(unsummarized)" : e.title)  · \(e.n) events")
+        for (t, q) in Segment.lines(s, episode: e.id) { print("      · \(t)  [\(q)]") }
+        print("")
+    }
+
 case "brief":
     // S8 — the morning brief, and the only thing in this phase the principal actually sees.
     //
@@ -937,12 +1005,28 @@ case "brief":
     // nothing, in one line.
     let s = Store(dbPath); Connect.migrate(s); Ledger.migrate(s)
     let n = Int(opt("--n", "3")) ?? 3
+    Segment.migrate(s)
     let conns = Connect.forBrief(s, limit: n)
     let open = Contradict.open(s, limit: 3)
+    let lastDay = s.rows("SELECT max(day) FROM episode;").first?.first ?? ""
+    let eps = lastDay.isEmpty ? [] : Segment.forDay(s, day: lastDay).filter { !$0.title.isEmpty }
     let f = DateFormatter(); f.dateFormat = "EEEE d MMMM"
     print("\n\(f.string(from: Date()))\n")
 
-    if conns.isEmpty && open.isEmpty {
+    if !eps.isEmpty {
+        print("  \(lastDay)")
+        for e in eps {
+            print("\n    \(e.title)  · \(e.n) events, \(stamp(e.from).suffix(5))–\(stamp(e.to).suffix(5))")
+            // Two lines each. The episode holds up to five; a brief that prints all of them
+            // is a transcript, and the point of a brief is that it is read.
+            for (txt, q) in Segment.lines(s, episode: e.id).prefix(2) {
+                print("      · \(txt.prefix(104))  [\(q)]")
+            }
+        }
+        print("")
+    }
+
+    if conns.isEmpty && open.isEmpty && eps.isEmpty {
         print("  Nothing worth your attention. (Some weeks have no story.)\n")
         break
     }
@@ -980,6 +1064,19 @@ case "dream":
         p.anchors = Int(opt("--anchors", "500")) ?? 500
         p.sinceDays = Int(opt("--since", "0")) ?? 0
 
+        Segment.migrate(s)
+        print("S1+S2  episodes")
+        var sp = Segment.Params()
+        sp.day = opt("--day", "")
+        let sr = await Segment.run(s, sp,
+                    sources: "'claudecode','gmail','imessage','imap','iphone.note'",
+                    summarize: true, verbose: false)
+        if sr.judgeFailed { print("    unavailable: \(sr.lastError)") }
+        else {
+            Segment.persist(s, sr.built, day: sr.day)
+            print("    \(sr.day): \(sr.events) events → \(sr.episodes) episodes · \(sr.lines) cited lines · \(sr.uncited) uncited dropped")
+        }
+
         print("S4  contradictions")
         let c4 = await Contradict.scan(s, includeUnconfirmed: false,
                                        limit: 2000, minSim: Contradict.minSim,
@@ -994,7 +1091,7 @@ case "dream":
             print("    \(fmt(c5.scanned)) neighbour pairs · \(c5.candidates) candidates · \(c5.grounded) share a rare term · \(c5.kept) kept")
         }
         s.checkpoint()
-        print("\n\(String(format: "%.0f", Date().timeIntervalSince(t0)))s. S1 segmentation, S2 summarization and S6 decay are not built yet.")
+        print("\n\(String(format: "%.0f", Date().timeIntervalSince(t0)))s. S6 FSRS decay is not built yet, and neither is EM-LLM's graph refinement of S1's boundaries.")
         print("Run `exo brief` for the morning read-out.")
     } else { print("needs macOS 26+") }
 
@@ -1130,6 +1227,88 @@ case "contra-resolve":
     case .ok(let note): s.checkpoint(); print("\(pos[1]): \(note)")
     case .failed(let why): print("not resolved — \(why)")
     }
+
+case "segment-test":
+    let s = Store(dbPath); Segment.migrate(s)
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  ✅ \(label)"); pass += 1 }
+        else { print("  ❌ \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+    let t0: Int64 = 1_750_000_000_000_000
+    func mk(_ i: Int, _ v: [Double], minutesIn: Int) -> Segment.Item {
+        Segment.Item(seq: Int64(1000 + i), ts: t0 + Int64(minutesIn) * 60_000_000,
+                     source: "t", text: "note \(i)", vec: v)
+    }
+    let A: [Double] = [1, 0, 0], B: [Double] = [0, 1, 0], C: [Double] = [0, 0, 1]
+
+    // The centroid is the whole point of measuring surprise this way.
+    let alternating = [A, B, A, B, A, B].enumerated().map { mk($0.offset, $0.element, minutesIn: $0.offset) }
+    let sAlt = Segment.surprise(alternating, window: 5)
+    let pairwise = (1..<alternating.count).map { 1 - Segment.cos(alternating[$0].vec, alternating[$0 - 1].vec) }
+    chk("alternating topics look maximally surprising pairwise",
+        String(format: "%.2f", pairwise.max() ?? 0), "1.00")
+    chk("…but against a running centroid they are one episode",
+        String(sAlt.dropFirst(2).allSatisfy { $0 < 0.6 }), "true")
+
+    // A genuine switch still registers.
+    var switching = (0..<6).map { mk($0, A, minutesIn: $0) }
+    switching += (6..<12).map { mk($0, C, minutesIn: $0) }
+    let sSwitch = Segment.surprise(switching, window: 5)
+    chk("a real topic switch peaks", String(sSwitch[6] > 0.9), "true")
+    var p2 = Segment.Params(); p2.minEvents = 3; p2.k = 1.0
+    chk("…and becomes a boundary", String(Segment.boundaries(switching, p2).idx.contains(6)), "true")
+
+    // A long pause is a boundary whatever the content says.
+    var paused = (0..<4).map { mk($0, A, minutesIn: $0) }
+    paused += (4..<8).map { mk($0, A, minutesIn: 200 + $0) }
+    chk("a 3-hour gap cuts even when the topic never changed",
+        String(Segment.boundaries(paused, p2).idx.contains(4)), "true")
+
+    // Runs shorter than minEvents are not episodes.
+    let eps = Segment.build(switching, p2)
+    chk("no episode is shorter than minEvents",
+        String(eps.allSatisfy { $0.items.count >= p2.minEvents }), "true")
+    chk("and every event still lands in one",
+        String(eps.reduce(0) { $0 + $1.items.count }), String(switching.count))
+
+    // ── persistence, citation integrity, cascade ──
+    let marker = "segmenttest"
+    s.exec("DELETE FROM events WHERE source='\(marker)';")
+    let now = nowMicros()
+    for i in 0..<3 {
+        s.exec("""
+            INSERT INTO events(ts,ts_tz,source,source_kind,trust,retention,text,content_hash)
+            VALUES(\(now + Int64(i) * 60_000_000), 0, '\(marker)', 'own_file', 'self',
+                   'text', 'segment fixture note \(i)', 'sg\(i)');
+            """)
+    }
+    let seqs = s.rows("SELECT seq FROM events WHERE source='\(marker)' ORDER BY seq;").compactMap { Int64($0[0]) }
+    guard seqs.count == 3 else { print("  ❌ fixture: \(seqs.count) events"); break }
+    var ep = Segment.Episode(id: "epi_segmenttest",
+                             items: seqs.enumerated().map {
+                                 Segment.Item(seq: $0.element, ts: now, source: marker,
+                                              text: "x", vec: A)
+                             }, peak: 0.5)
+    ep.title = "fixture"
+    ep.lines = [("first thing", seqs[0]), ("second thing", seqs[1])]
+    Segment.persist(s, [ep], day: "2026-01-01")
+    chk("lines persist with their citations",
+        String(Segment.lines(s, episode: ep.id).count), "2")
+
+    // Area F: a derived artifact must carry provenance back to source spans so deletion can
+    // cascade, and it must be built in rather than retrofitted. Retention deletes events; a
+    // day's read-out quoting text that no longer exists is worse than no read-out.
+    s.exec("DELETE FROM events WHERE seq=\(seqs[0]);")
+    chk("deleting a cited event removes the line that cited it",
+        String(Segment.lines(s, episode: ep.id).count), "1")
+    chk("…and its membership in the episode",
+        String(s.scalar("SELECT count(*) FROM episode_event WHERE seq=\(seqs[0]);")), "0")
+
+    s.exec("DELETE FROM events WHERE source='\(marker)';")
+    s.exec("DELETE FROM episode WHERE episode_id='epi_segmenttest';")
+    s.checkpoint()
+    print("\n  \(pass) passed, \(fail) failed")
 
 case "connect-test":
     // Everything here is deterministic. The model's contribution to S5 is one sentence of
