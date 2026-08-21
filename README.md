@@ -10,7 +10,7 @@ Research: [`portfolio-research/PASS-4-exocortex-crossportfolio-research.md`](../
 
 | Component | Status | Headline |
 |---|---|---|
-| **[`exo/`](exo/)** — Phases 1–6: capture → vectors → belief ledger → contradictions → connections → episodes | ✅ built, **45/45 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, four-way contradiction detection, nightly dream cycle (S1/S2/S4/S5/S8) + morning brief |
+| **[`exo/`](exo/)** — Phases 1–7: capture → vectors → belief ledger → contradictions → connections → episodes → decay | ✅ built, **60/60 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, four-way contradiction detection, **Area F's nightly DAG complete** (S1/S2/S4/S5/S6/S8) + morning brief |
 | **[`mcp-bus/`](mcp-bus/)** — the memory contract | ✅ **v1.0.0 FROZEN** | 9 tools, 4 trust tiers; invariants proven by smoke tests |
 
 ## exo — Phase 1
@@ -53,8 +53,9 @@ harness built, cross-client run pending).
 
 ## Next
 
-**Phase 7 — decay, then the daemons.** S1 segmentation, S2 summarization, S4 contradictions,
-S5 connections and S8 the morning brief are built, and `exo dream` runs them nightly. What remains
-is **S6 FSRS decay** — `R = exp(ln(0.9)·t/S)`, retrieval strengthens, disuse demotes to cold
-storage and never hard-deletes — plus EM-LLM's graph-theoretic refinement of S1's boundaries.
-Then the five daemons: Scout, Butler, Ledger, Historian, Editor.
+**Phase 8 — the daemons.** Area F's nightly DAG is complete: S1 segment, S2 summarize, S4
+contradict, S5 connect, S6 decay, S8 brief, all run by `exo dream`. What remains are the five
+daemons — **Scout** (nightly, question rot at 60d), **Butler** (calendar T−30, cap at 5 bullets,
+lead with unresolved commitments), **Ledger** (real-time, tune to P≈0.9 even at R=0.5),
+**Historian** (Sunday, *"some weeks have no story; say so"*), **Editor** (on request only, never
+autonomous) — plus EM-LLM's graph-theoretic refinement of S1's boundaries.

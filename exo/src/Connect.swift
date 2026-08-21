@@ -153,6 +153,9 @@ enum Connect {
           -- handle is a short code: by definition a business, never a person. 189 rows,
           -- and they were producing findings like "Tyler, The Creator: the 2026 lineup is
           -- here" paired with the same campaign's next blast.
+          -- S6: a cold row is not a candidate. Demotion that changes nothing downstream is
+          -- theatre; this is one of the three places it bites.
+          AND NOT EXISTS (SELECT 1 FROM memory_state m WHERE m.seq = e.seq AND m.tier = 'cold')
           AND NOT (e.source LIKE 'imessage%'
                    AND (e.title GLOB '[0-9][0-9][0-9][0-9][0-9]'
                      OR e.title GLOB '[0-9][0-9][0-9][0-9][0-9][0-9]'))

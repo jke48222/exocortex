@@ -188,8 +188,8 @@ final class Store {
         var st: OpaquePointer?; defer { sqlite3_finalize(st) }
         let sql = """
         INSERT OR IGNORE INTO events
-          (ts,ts_tz,source,source_kind,trust,retention,app,bundle_id,title,role,text,external_id,meta,content_hash)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?);
+          (ts,ts_tz,source,source_kind,trust,retention,app,bundle_id,title,role,text,external_id,meta,content_hash,ingested_at)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);
         """
         guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return false }
         sqlite3_bind_int64(st, 1, e.ts); sqlite3_bind_int64(st, 2, tzOffsetMinutes())
@@ -198,6 +198,11 @@ final class Store {
         bind(st, 7, e.app);    bind(st, 8, e.bundle)
         bind(st, 9, e.title);  bind(st, 10, e.role); bind(st, 11, e.text)
         bind(st, 12, e.externalID); bind(st, 13, e.metaJSON); bind(st, 14, e.hash)
+        // WHEN THIS ARRIVED, which is not when it happened. `ts` is the event's own time —
+        // a 2019 WhatsApp message restored from an iPhone backup last week has a 2019 `ts`
+        // and a one-week-old relationship with this store. Decay measures neglect, and you
+        // cannot have neglected something you only just received.
+        sqlite3_bind_int64(st, 15, nowMicros())
         return sqlite3_step(st) == SQLITE_DONE && sqlite3_changes(db) > 0
     }
 
@@ -332,7 +337,7 @@ final class Store {
 
     // MARK: search
     struct Hit { let seq: Int, ts: Int64, app, title, snip, trust, source: String, score: Double }
-    func search(_ q: String, limit: Int, minTrust: String?) -> [Hit] {
+    func search(_ q: String, limit: Int, minTrust: String?, includeCold: Bool = true) -> [Hit] {
         var st: OpaquePointer?; defer { sqlite3_finalize(st) }
         let order = ["self": 0, "verified": 1, "third_party": 2, "untrusted": 3]
         let filter = minTrust.flatMap { order[$0] }.map { rank -> String in
@@ -343,7 +348,8 @@ final class Store {
         SELECT e.seq, e.ts, e.app, e.title,
                snippet(events_fts, 2, '[', ']', '…', 12), e.trust, e.source, bm25(events_fts)
         FROM events_fts JOIN events e ON e.seq = events_fts.rowid
-        WHERE events_fts MATCH ?\(filter) ORDER BY bm25(events_fts) LIMIT ?;
+        WHERE events_fts MATCH ?\(filter)\(includeCold ? "" : " AND NOT EXISTS (SELECT 1 FROM memory_state m WHERE m.seq = e.seq AND m.tier = 'cold')")
+        ORDER BY bm25(events_fts) LIMIT ?;
         """
         guard sqlite3_prepare_v2(db, sql, -1, &st, nil) == SQLITE_OK else { return [] }
         bind(st, 1, q); sqlite3_bind_int(st, 2, Int32(limit))
