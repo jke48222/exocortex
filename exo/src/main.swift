@@ -733,6 +733,62 @@ case "belief-history":
         print("  \(b.beliefFrom.prefix(10))..\(b.beliefTo?.prefix(10) ?? "now")  \(b.polarity > 0 ? "✓" : "✗") \(b.text)")
     }
 
+case "tell":
+    // Direct elicitation. Only 1.1% of this corpus contains first-person disclosure, and
+    // almost all of that is operational ("I think we should meet Tuesday") rather than
+    // character. People act on their beliefs; they rarely write them down. So the highest
+    // confidence tier in the schema — explicit_statement — is populated by asking.
+    let s = Store(dbPath); Ledger.migrate(s)
+    let text = positional().joined(separator: " ")
+    guard !text.isEmpty else { print("usage: exo tell \"I hate driving at night\""); break }
+    let run = Ledger.startRun(s, model: "human", version: "-", promptHash: "-", codeVersion: "tell-1")
+    let cid = Ledger.upsertClaim(s, subject: "me", predicate: "states", object: nil,
+                                 polarity: text.lowercased().contains(" not ")
+                                        || text.lowercased().contains("n't ") ? -1 : 1,
+                                 scope: opt("--scope", "").isEmpty ? nil : opt("--scope", ""),
+                                 norm: text)
+    let id = Ledger.mindChange(s, from: nil, toClaim: cid, at: Ledger.now(),
+                               confidence: 1.0, confidenceSrc: "explicit_statement",
+                               runID: run, evidence: [])
+    s.checkpoint()
+    print("recorded as a belief (explicit_statement, confidence 1.00)")
+    print("  \(id)  \(text)")
+
+case "ask":
+    // A short interview. Questions target the things a life-log cannot observe: values,
+    // dispositions, and the reasons behind choices.
+    let s = Store(dbPath); Ledger.migrate(s)
+    let bank = [
+        "What's something you believe about how you work best?",
+        "What do you care about that most people around you don't?",
+        "What's a decision you made that you'd defend even if it turned out badly?",
+        "What kind of person do you try to be when things go wrong?",
+        "What's something you used to believe and no longer do?",
+        "What do you want the next five years to look like?",
+        "What consistently annoys you that others seem fine with?",
+        "What are you unusually good at, and how do you know?",
+    ]
+    let n = Int(opt("--n", "3")) ?? 3
+    let run = Ledger.startRun(s, model: "human", version: "-", promptHash: "-", codeVersion: "ask-1")
+    var recorded = 0
+    print("Answer in a sentence or two. Press return on an empty line to skip.\n")
+    for q in bank.shuffled().prefix(n) {
+        print("  \(q)")
+        print("  > ", terminator: "")
+        guard let a = readLine()?.trimmingCharacters(in: .whitespacesAndNewlines), !a.isEmpty else {
+            print("    (skipped)\n"); continue
+        }
+        let cid = Ledger.upsertClaim(s, subject: "me", predicate: "states", object: nil,
+                                     polarity: 1, scope: q, norm: a)
+        _ = Ledger.mindChange(s, from: nil, toClaim: cid, at: Ledger.now(),
+                              confidence: 1.0, confidenceSrc: "explicit_statement",
+                              runID: run, evidence: [])
+        recorded += 1
+        print("    recorded\n")
+    }
+    s.checkpoint()
+    print("\(recorded) belief(s) recorded at the highest confidence tier.")
+
 case "beliefs-review":
     // Area E is explicit that relation extraction lands around 60-75 F1 and that human
     // correction is a COMPONENT, not a fallback. Claims arrive unconfirmed
@@ -909,6 +965,8 @@ default:
       exo forget-secrets            delete anything scan-secrets finds
       exo extract [--limit N]       extract claims into the belief ledger
       exo beliefs <subject> [--as-of D]
+      exo tell "<statement>"        record a belief directly (highest confidence)
+      exo ask [--n 3]               short interview; the corpus cannot observe values
       exo beliefs-review            unconfirmed claims awaiting a human
       exo beliefs-confirm <id> / beliefs-reject <id>
       exo belief-history <subject>

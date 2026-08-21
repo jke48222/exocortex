@@ -41,6 +41,8 @@ enum Extract {
         var volatility: String
         @Guide(description: "True only when the writer is expressing what they like, dislike, want, prefer, chose, decided, believe or think. False for a plain report of facts, times, weather or arrangements.")
         var expressesOpinion: Bool
+        @Guide(description: "True only if this reveals something lasting about the writer as a person — their taste, values, habits, or how they see themselves — that would still be true a year from now even if every current project vanished. False for anything about a specific task, file, website, or piece of work.")
+        var revealsCharacter: Bool
         @Guide(description: "The situation this holds in, or empty if it holds generally.")
         var scope: String
         @Guide(description: "A short restatement of the claim as a standalone sentence.")
@@ -60,17 +62,35 @@ enum Extract {
     /// exactly the kind of standing preference this exists to capture. Leading with what
     /// TO extract, and gating the rest on an explicit opinion flag, recovers the positives
     /// without readmitting weather and logistics.
+    /// The distinction that took three failed passes to name: a DIRECTIVE is not a
+    /// disposition. "I want the etag to change" and "I want a digital brain that transforms
+    /// how I work" are both "I want", and only the second says anything about the person.
+    /// The first corpus this ran against was mostly instructions to an assistant, so 141 of
+    /// 145 extracted claims were tasks. No amount of prompt-tightening turns a task into a
+    /// belief; the fix is a discriminator on whether the statement outlives the work.
     static let instructions = """
-        You extract the writer's OPINIONS, PREFERENCES and DECISIONS from their own words.
+        You extract lasting things about WHO THE WRITER IS: their taste, values, opinions,
+        habits, and how they see themselves and other people.
 
-        Extract a claim whenever the writer expresses what they like, dislike, want,
-        prefer, chose, decided, believe or think — including casual or blunt phrasings.
+        The test for every candidate claim: would this still be true and worth knowing a
+        year from now, if every project they are currently working on disappeared?
 
-        Do NOT extract: weather, times, prices, appointments, or what other people said.
-        Do NOT extract a plain description of an action that carries no opinion.
+        EXTRACT — these survive the test:
+        - "I hate driving at night"
+        - "I think loyalty matters more than talent"
+        - "I've always been the one who plans things"
+        - "I don't drink anymore"
+
+        DO NOT EXTRACT — these are instructions or transient work, not character:
+        - "I want the homepage title to change"    (a task)
+        - "I like the software ones"               (about a work artifact)
+        - "make the video shorter"                 (a command)
+        - "arrive by 9:30", "tomorrow is sunny"    (logistics, weather)
+        - anything about what someone else said
 
         The writer is "me". One proposition per claim; split conjunctions.
-        Use the statement's own wording rather than a generic verb.
+        Use the writer's own wording. Most messages contain nothing that survives the
+        test, and an empty list is a good answer.
         """
     static var promptHash: String { sha(instructions).prefix(16).description }
 #endif
@@ -82,12 +102,24 @@ enum Extract {
             SELECT e.seq, e.text FROM events e
             LEFT JOIN belief_evidence v ON v.seq = e.seq
             WHERE e.trust = 'self'
-              AND length(e.text) BETWEEN 120 AND 2000
+              AND length(e.text) BETWEEN 60 AND 2000
               AND v.seq IS NULL
               -- Beliefs live in deliberate writing. iMessage and calendar entries are
               -- overwhelmingly logistics ("arrive by 9:30", "tomorrow is sunny"), which is
               -- where the first pass found its weather forecasts.
-              AND e.source IN ('claudecode','iphone.note','gmail','imap')
+              -- Self-expression lives in conversation, not in instructions to a tool.
+              -- claudecode is excluded outright: 141 of the first 145 claims came from it
+              -- and every one was a task request.
+              AND e.source IN ('imessage','iphone.note','iphone.whatsapp','gmail','imap')
+              -- Only 137 of 12,673 self events (1.1%) contain a first-person statement.
+              -- Scanning the other 98.9% is the model reading logistics and correctly
+              -- finding nothing, at ~0.7s each. Target the disclosure directly.
+              AND (lower(e.text) LIKE '%i think %' OR lower(e.text) LIKE '%i feel %'
+                OR lower(e.text) LIKE '%i believe%' OR lower(e.text) LIKE '%i hate %'
+                OR lower(e.text) LIKE '%i love %'  OR lower(e.text) LIKE '%i prefer%'
+                OR lower(e.text) LIKE '%i always%' OR lower(e.text) LIKE '%i never%'
+                OR lower(e.text) LIKE '%i don''t like%' OR lower(e.text) LIKE '%i want to be%'
+                OR lower(e.text) LIKE '%i care about%' OR lower(e.text) LIKE '%i''m the kind%')
               -- Claude Code stores slash commands, caveats and system reminders as
               -- type:user records. They are scaffolding the principal never wrote, and
               -- they dominated the first candidate pool.
@@ -143,7 +175,7 @@ enum Extract {
                     // The opinion flag is the real discriminator. Volatility alone was not
                     // enough: "tomorrow is sunny" came back tagged `seasonal`, not
                     // `volatile`, and so survived a volatility-only filter.
-                    guard c.expressesOpinion else { out.dropped += 1; continue }
+                    guard c.expressesOpinion, c.revealsCharacter else { out.dropped += 1; continue }
                     if c.volatility.lowercased().hasPrefix("vol") { out.dropped += 1; continue }
                     // Beliefs are the principal's. Claims about other people are
                     // third-party assertions, not things I believe.

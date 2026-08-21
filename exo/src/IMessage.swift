@@ -114,6 +114,13 @@ enum IMessage {
             }
             guard let body = resolved, !body.isEmpty else { continue }
             if ts < cutoff { continue }
+            // Tapbacks ("Loved \u{201C}…\u{201D}") are reactions that QUOTE the other person's
+            // message. is_from_me is 1 because you sent the reaction, but the words are
+            // theirs — 1,806 of them were being stored as things the principal wrote,
+            // which poisons any attempt to learn what the principal thinks.
+            let isTapback = ["Loved \u{201C}", "Liked \u{201C}", "Disliked \u{201C}", "Laughed at \u{201C}",
+                             "Emphasized \u{201C}", "Questioned \u{201C}", "Removed a heart from \u{201C}"]
+                .contains { body.hasPrefix($0) }
             let (clean, red) = Exclusion.redact(body)
             if red > 0 || clean.isEmpty {
                 store.recordExclusion(rule: "imessage:secret-shaped", bundle: "", app: "Messages")
@@ -122,9 +129,9 @@ enum IMessage {
             // Trust by capture path. What I sent is `self`. What someone else sent is
             // third-party data about a person who never consented to this archive, so it
             // is trusted lower AND retained shorter (Rynes C-212/13).
-            var e = Event(source: "imessage",
-                          sourceKind: fromMe ? .typed : .messageOther)
-            e.retention = fromMe ? "text" : "correspondence"
+            var e = Event(source: isTapback ? "imessage.reaction" : "imessage",
+                          sourceKind: (fromMe && !isTapback) ? .typed : .messageOther)
+            e.retention = (fromMe && !isTapback) ? "text" : "correspondence"
             e.app = "Messages"; e.bundle = "com.apple.MobileSMS"
             e.title = handle.isEmpty ? "(unknown)" : handle
             e.role = fromMe ? "me" : "them"
