@@ -10,7 +10,7 @@ Research: [`portfolio-research/PASS-4-exocortex-crossportfolio-research.md`](../
 
 | Component | Status | Headline |
 |---|---|---|
-| **[`exo/`](exo/)** — Phases 1–10: capture → vectors → beliefs → contradictions → connections → episodes → decay → commitments → dossiers → the weekly story | ✅ built, **87/87 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, **Area F's nightly DAG complete** + Ledger (P=1.00/R=0.67), Butler, and Historian daemons |
+| **[`exo/`](exo/)** — Phases 1–11: capture → vectors → beliefs → contradictions → connections → episodes → decay → commitments → dossiers → the weekly story → standing questions | ✅ built, **105/105 tests** | 14 sources, 100k events, 0.95 Recall@1 hybrid retrieval, bitemporal belief ledger, **Area F's nightly DAG complete** + four of five daemons: Ledger (P=1.00/R=0.67), Butler, Historian, Scout |
 | **[`mcp-bus/`](mcp-bus/)** — the memory contract | ✅ **v1.0.0 FROZEN** | 9 tools, 4 trust tiers; invariants proven by smoke tests |
 
 ## exo — Phase 1
@@ -53,8 +53,8 @@ harness built, cross-client run pending).
 
 ## Next
 
-**Phase 11 — the last two daemons.** The DAG and three of five daemons ship: Ledger
-(P = 1.00/R = 0.67), Butler (on-demand dossier), Historian (Sunday, citation-verified beats, code
-decides whether the week has a story). Remaining: **Scout** (needs a source of open questions),
-**Editor** (on request only, never autonomous — the least suited to a local 3B). Plus EM-LLM's
-boundary refinement and the `ABMultiValue` contacts join, whose backup is still on disk.
+**Phase 12 — the last daemon, or the joins.** Four of five daemons ship — Ledger
+(P = 1.00/R = 0.67), Butler, Historian, Scout (standing questions, tight-key relevance decided in
+code, 60-day rot). Remaining: **Editor** (on request only, never autonomous — the least suited to
+a local 3B), EM-LLM's boundary refinement, and the `ABMultiValue` contacts join, whose backup is
+still on disk.
