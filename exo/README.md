@@ -1,6 +1,6 @@
 # exo — Exocortex capture fleet + retrieval + belief ledger + dream cycle
 
-**Phases 1–8.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
+**Phases 1–9.** Multi-source capture → SQLite/FTS5 + binary vector index → hybrid RRF search →
 bitemporal belief ledger → contradiction detection → connection discovery → episode segmentation
 and recall → engineered forgetting → commitment tracking, with the retention policy and
 capture-exclusion list shipped *now* rather than later.
@@ -37,6 +37,7 @@ bash build/build.sh          # -> build/exo
 ./build/exo connect --histogram             # calibrate the band before trusting it
 ./build/exo segment                         # cut the day into episodes, then summarize
 ./build/exo day                             # yesterday, as episodes with citations
+./build/exo butler <handle>                 # the Butler daemon: the dossier on one person
 ./build/exo commitments --scan              # the Ledger daemon: what you owe, and are owed
 ./build/exo commitments --eval              # precision/recall on the labelled set
 ./build/exo commit-done <id>                # discharged
@@ -50,6 +51,7 @@ bash build/build.sh          # -> build/exo
 ./build/exo segment-test                    # 10/10 surprise, boundaries, citation cascade
 ./build/exo decay-test                      # 15/15 the curve, immunity, and never deleting
 ./build/exo promise-test                    # 11/11 commissive gate, dedup, discharge, cascade
+./build/exo butler-test                     # 5/5   ordering, the 5-bullet cap, tapback filter
 ```
 
 ## Backup
@@ -158,6 +160,24 @@ the other, and a schema-level escape hatch went unused 39 times out of 39. Inter
 notes and keeping rare terms makes the link grounded *by construction*. Full numbers in
 [RESULTS.md §7](RESULTS.md).
 
+## Butler — the dossier, and the trigger this corpus cannot provide
+
+`exo butler <handle>` briefs you on one person. Area F argues the pre-meeting briefing category
+is a real gap: it is **entirely CRM-scoped sales tooling** with no episodic substrate — *they
+summarize; they don't remember* — so none of it can say *"you promised her the doc three weeks
+ago and never sent it."*
+
+**The T−30 calendar trigger has nothing to fire on here**, and that is a measured fact rather than
+a missing feature: **0 of 1,334 calendar events carry attendee data**, every upcoming entry is a
+public holiday (it is a subscribed feed), and **3 of 686 contacts have a phone number** — the
+iPhone importer read `ABPerson` names and never followed `ABMultiValue`. So the dossier runs on
+demand and the scheduler waits on data the store does not have. A timer that silently never fires
+would have looked like more progress and been worth less.
+
+The dossier problem is answered by a **hard cap of 5 bullets** in priority order: what you owe,
+what you are owed, a cadence break *measured against this relationship's own rate*, the last thing
+actually said, then volume. Full numbers in [RESULTS.md §11](RESULTS.md).
+
 ## Commitments — the Ledger daemon, and the first stage the model was good at
 
 `exo commitments --scan` finds promises in both directions and keeps them until discharged.
@@ -260,8 +280,8 @@ in Phase 1 and not Phase 6.
 ## Next
 
 **Area F's DAG is built** — S1 segment, S2 summarize, S4 contradict, S5 connect, S6 decay, S8
-brief — plus the **Ledger** daemon, and `exo dream` runs all of it. Four daemons remain:
-**Scout** (nightly, question rot at 60d), **Butler** (calendar T−30, cap 5 bullets — it can now
-lead with unresolved commitments, which is what it was waiting for), **Historian** (Sunday,
-*"some weeks have no story; say so"*), **Editor** (on request only, never autonomous). Plus
-EM-LLM's graph-theoretic refinement of S1's boundaries.
+brief — plus the **Ledger** and **Butler** daemons. Three remain: **Scout** (nightly, question rot
+at 60d — needs a source of open questions and a frontier model, neither local), **Historian**
+(Sunday, *"some weeks have no story; say so"*), **Editor** (on request only, never autonomous).
+Also outstanding: EM-LLM's graph-theoretic refinement of S1's boundaries, and the `ABMultiValue`
+ingest gap that would give Butler its name↔handle join.

@@ -934,6 +934,30 @@ case "ledger-test":
 
     print("\n  \(pass) passed, \(fail) failed")
 
+case "butler":
+    let s = Store(dbPath); Promise.migrate(s)
+    let who = positional().joined(separator: " ")
+    guard !who.isEmpty else {
+        print("""
+        usage: exo butler <handle or name>
+
+          Area F specifies a calendar T−30 trigger. This store has none to fire on:
+          0 of 1,334 calendar events carry attendee data, every upcoming entry is a public
+          holiday, and 3 of 686 contacts have a phone number. So the dossier runs on demand.
+        """)
+        break
+    }
+    let people = Butler.resolve(s, who)
+    guard !people.isEmpty else { print("nobody matching \"\(who)\" appears in the store"); break }
+    if people.count > 1 && people[0].handle.lowercased() != who.lowercased() {
+        print("\(people.count) matches — showing the most active. Others: "
+              + people.dropFirst().map(\.handle).joined(separator: ", ") + "\n")
+    }
+    let p = people[0]
+    print("\n  \(p.display)\n")
+    for b in Butler.brief(s, person: p) { print("    · \(b)") }
+    print("")
+
 case "commitments":
     let s = Store(dbPath); Promise.migrate(s)
     if flag("--eval") {
@@ -1356,6 +1380,53 @@ case "contra-resolve":
     case .ok(let note): s.checkpoint(); print("\(pos[1]): \(note)")
     case .failed(let why): print("not resolved — \(why)")
     }
+
+case "butler-test":
+    let s = Store(dbPath); Promise.migrate(s)
+    var pass = 0, fail = 0
+    func chk(_ label: String, _ got: String, _ want: String) {
+        if got == want { print("  \u{2705} \(label)"); pass += 1 }
+        else { print("  \u{274C} \(label)\n       got:  \(got)\n       want: \(want)"); fail += 1 }
+    }
+    let marker = "+15550000000"
+    func wipe() { s.exec("DELETE FROM events WHERE title='\(marker)';") }
+    wipe()
+    let now = nowMicros()
+    func add(_ text: String, _ source: String, _ trust: String, _ agoDays: Int, _ hash: String) {
+        s.exec("""
+            INSERT INTO events(ts,ts_tz,source,source_kind,trust,retention,title,text,content_hash,ingested_at)
+            VALUES(\(now - Int64(agoDays) * 86_400_000_000), 0, '\(source)', 'message', '\(trust)',
+                   'text', '\(marker)', '\(text)', '\(hash)', \(now));
+            """)
+    }
+    add("hey are we still on for saturday afternoon", "imessage", "third_party", 400, "bt0")
+    add("sounds good see you then and thanks again", "imessage", "self", 30, "bt1")
+    add("Laughed at a message about the meeting time", "imessage.reaction", "third_party", 1, "bt2")
+
+    guard let p = Butler.resolve(s, marker).first else { print("  \u{274C} resolve failed"); break }
+    chk("the handle resolves to the person", p.handle, marker)
+    chk("reactions do not count as the last thing they said",
+        String(Butler.brief(s, person: p).contains { $0.contains("Laughed at") }), "false")
+    print("     ^ a tapback carries is_from_me=1 but quotes the other person's words")
+
+    add("https://www.tiktok.com/t/ZTDDwda32/", "imessage", "third_party", 0, "bt3")
+    chk("a bare link is not a thing somebody said",
+        String(Butler.brief(s, person: p).contains { $0.contains("tiktok") }), "false")
+
+    // Commitments lead, and the cap holds.
+    let seq = s.rows("SELECT seq FROM events WHERE title='\(marker)' ORDER BY seq LIMIT 1;")
+        .first.flatMap { Int64($0[0]) } ?? 0
+    Promise.store(s, seq: seq, direction: "mine", counterparty: marker,
+                  quote: "I will send the deck", action: "send the deck", due: nil,
+                  ts: now - 21 * 86_400_000_000)
+    guard let p2 = Butler.resolve(s, marker).first else { print("  \u{274C} re-resolve failed"); break }
+    let bullets = Butler.brief(s, person: p2)
+    chk("what you owe leads the dossier", String(bullets.first?.hasPrefix("You owe them") ?? false), "true")
+    print("     ^ Area F: lead with unresolved commitments, both directions")
+    chk("the dossier is capped at 5 bullets", String(bullets.count <= Butler.maxBullets), "true")
+
+    wipe(); s.checkpoint()
+    print("\n  \(pass) passed, \(fail) failed")
 
 case "promise-test":
     let s = Store(dbPath); Promise.migrate(s)

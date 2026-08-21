@@ -745,3 +745,71 @@ This also makes Area F's third never-decay clause reachable: **an open commitmen
 cold.** It was written in §9 against a table that did not exist yet, and immunity went from 1 row
 to 5 the moment the daemon ran. A promise you have not kept is the last thing that should quietly
 be demoted.
+
+---
+
+## 11. Butler — the daemon whose trigger this corpus cannot provide
+
+Area F argues the pre-meeting briefing category is a real gap rather than a crowded one: Oliv,
+Gong, Clari, Chorus, Avoma, Sybill and Capsule are **entirely CRM-scoped sales tooling** — they
+see the work-relationship slice only, have **no episodic substrate** (*they summarize; they don't
+remember*), and optimize for pipeline metrics. A Butler on a consolidated life log can say
+*"you promised her the doc three weeks ago and never sent it"*, which is unreachable from CRM
+data. That sentence needs §10's commitments underneath it, which is why this was built after them.
+
+### 11.1 The T−30 calendar trigger has nothing to fire on
+
+| what the trigger needs | what this store has |
+|---|---|
+| calendar events with attendees | **0 of 1,334** carry any `meta` at all |
+| upcoming personal meetings | every upcoming entry is a public holiday — Labor Day, Rosh Hashanah, Yom Kippur, Columbus Day, Halloween. It is a **subscribed holiday feed** |
+| a name ↔ handle join | **3 of 686 contacts have a phone number, 1 has an email** |
+
+That last row is a fixable ingest gap and worth naming precisely: the iPhone importer read
+`ABPerson` name fields and never followed `ABMultiValue`, where the numbers live. Fixing it would
+restore the join; it would not conjure meetings that are not in the calendar.
+
+**So the scheduler is unreachable and the dossier — the part carrying the value — is not.**
+Butler runs on demand against a person. Shipping a timer that silently never fires would have
+looked like more progress and been worth less.
+
+### 11.2 The dossier problem, and the ordering that answers it
+
+Area F's named failure mode is that a briefing which prints everything known about a person is
+not a briefing, it is a file, and the reader stops opening it. So: **hard cap at 5 bullets**, and
+the order is a priority rather than a layout —
+
+1. what **you** owe them (first, because it is the thing people actually forget)
+2. what they owe you
+3. a cadence break, and only when it is unusual *for this relationship* — "quiet for 40 days"
+   means nothing without the normal gap, so the test is against this pair's own message rate
+4. the last thing actually said, verbatim
+5. volume and span, last, because it is always available and rarely the point
+
+Real output, unedited:
+
+```
+  +16787178432
+    · They owe you: I'll order — said 16 days ago.
+    · They owe you: see if I can be a ta — said 2 days ago.
+    · They last said: "He will send our money after he's back from Jamaica"
+    · 3,802 messages, 2025-10-23 to 2026-08-19.
+```
+
+### 11.3 The tapback bug, for the third time
+
+The first version's "last said" line for one contact was:
+
+> *They last said: "Laughed at 'is this thing on?'"*
+
+That is a **tapback**. It carries `is_from_me=1` because you sent the reaction, while the words
+quoted inside it are the other person's — the same defect that had 10,927 rows mis-stored as
+things the principal wrote until an earlier phase reclassified them to
+`imessage.reaction`/`third_party`. The reclassification worked; this query simply did not filter
+on it.
+
+Worth recording because it is the **third** appearance of one root cause: §10's writer-is-promiser
+check exists for *"She said - I'll see what I can learn on my end!!!"*, and both are the same
+question — **whose words are these, as distinct from who transmitted them?** A life-log that
+answers that question wrong will keep answering it wrong in new places, and each place needs its
+own guard.
