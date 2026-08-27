@@ -1,8 +1,9 @@
-# mcp-bus — the memory contract, and a server that honours it
+# mcp-bus, the memory contract, and a server that honours it
 
 **`CONTRACT.md`** is the frozen v1.0.0 spec. **`schema/tools.json`** is the machine-checkable
 tool surface. **`store.py`** is the read-only data + egress layer. **`server.py`** is a stdio
-MCP server now backed by the **real store** (91,384 events at time of writing).
+MCP server now backed by the **real store** (91,384 events when these invariants were run;
+the store had grown to 100,106 events by 2026-08-20, after the iPhone backup ingest).
 
 ```bash
 # what this client is allowed to see
@@ -21,19 +22,19 @@ Env: `EXO_PURPOSE` (client credential), `EXO_DB`, `EXO_AUDIT`, `EXO_CANARIES` (`
 { "mcpServers": {
     "exocortex": {
       "command": "python3",
-      "args": ["/Users/jalenedusei/fun-project/exocortex/mcp-bus/server.py"],
+      "args": ["/absolute/path/to/exocortex/mcp-bus/server.py"],
       "env": { "EXO_PURPOSE": "coding" }
     } } }
 ```
 
-Use `EXO_PURPOSE=coding` for any client that also has web or shell access — it is treated as
+Use `EXO_PURPOSE=coding` for any client that also has web or shell access. It is treated as
 **open-world** and gets the narrow projection only.
 
-## Verified against the real store, 8/8
+## Verified against the real store, 13/13
 
 | Invariant | Result |
 |---|---|
-| Real recall over 91,384 events | ✅ returns ranked, sanitized items |
+| Real recall over the store (91,384 events at run time) | ✅ returns ranked, sanitized items |
 | `min_trust` filters | ✅ `self` returns only `self`; `untrusted` widens |
 | **Open-world clients cannot reach `third_party`/`untrusted`** | ✅ 0 leaked |
 | Per-purpose `k` cap (oracle ≤5) | ✅ asked for 40, got 5 |
@@ -45,13 +46,13 @@ Use `EXO_PURPOSE=coding` for any client that also has web or shell access — it
 | **Egress sanitisation on real data** | ✅ **0 raw URLs leaked** |
 | **Canary rows stripped and reported** | ✅ |
 | Audit hash chain | ✅ 12 entries, intact |
-| Audit exposed as a tool | ✅ **no** — deliberately |
+| Audit exposed as a tool | ✅ **no**, deliberately |
 
 ## What it deliberately does not do
 
 **`beliefs_at` and `commitments` return empty with an `_unavailable` note.** They are backed
 by the bitemporal belief ledger, which is Phase 3 and does not exist yet. Returning an empty
-list and saying so beats inventing plausible beliefs — **a memory system that fabricates is
+list and saying so beats inventing plausible beliefs. **A memory system that fabricates is
 worse than one that admits a gap**, and this is exactly the failure mode PASS-4 Area A found
 in the benchmark literature.
 
