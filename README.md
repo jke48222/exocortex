@@ -1,5 +1,7 @@
 # Exocortex
 
+[![License](https://img.shields.io/github/license/jke48222/exocortex)](LICENSE) ![Top language](https://img.shields.io/github/languages/top/jke48222/exocortex) ![storage](https://img.shields.io/badge/storage-local----first%2C%20encrypted-blue) ![protocol](https://img.shields.io/badge/protocol-MCP-blue)
+
 Every AI assistant forgets you the moment you close the window. Exocortex is a personal memory
 that does not: it captures your own life log (messages, mail, browsing, files, terminal
 transcripts, phone backups) into one encrypted store on your own machine, and lends that memory
@@ -440,6 +442,10 @@ dossiers, the weekly story, standing questions). Nine test suites, 105 checks, a
   ledger records the app name so it is diagnosable.
 - **One daemon is unbuilt:** an editor that rewrites text on request. It is deliberately last,
   because it is the task least suited to a small on device model.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
 
 ---
 
